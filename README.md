@@ -27,6 +27,41 @@ On-demand skills. Bounded context. Built for DeepSeek Harness.
 
 需要 **Node.js 24.9+**；接入原生插件还需已安装 DSH。源码可直接运行，无需构建或 `npm install`。
 
+### 直接从 GitHub 安装（推荐）
+
+已有 `dsh` 命令时，可以直接从本仓库拉取并安装，无需先手动克隆：
+
+```sh
+# 下载仓库，并把插件加入 web profile
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills
+
+# 检查配置中出现 strong-skills / dsh-strong-skills
+dsh --profile web --dump-config
+
+# 启动；已有 DSH 进程请先退出再重新启动
+dsh web --profile web
+```
+
+这是 [DSH 官方支持的 GitHub 安装方式](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md#installing-from-github-the-build-script-catch)。DSH 会下载源码、安装包并加载其 `dsh.bundle` 配置；本项目入口是可直接运行的 `.mjs`，不需要编译。仓库名是 `dsh-mcp-strong-and-skills`，安装后的包名是 **`dsh-strong-skills`**。
+
+使用其他 profile 时，将以上三条命令中的 `web` 一起替换为实际名称。插件安装在 profile 中，不需要在每个代码项目里重复安装。
+
+需要固定代码版本时，可在仓库来源后追加 `#提交SHA`，例如安装已发布的初始代码提交：
+
+```sh
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#ebbe74359123ddf4c6cf6559a31abea2674eaa64
+```
+
+卸载时使用包名，然后重启对应 profile：
+
+```sh
+dsh plugin --profile web remove dsh-strong-skills
+```
+
+### 本地体验与源码安装
+
+想先检查源码、体验 CLI 或参与开发时，可以手动克隆后安装本地目录：
+
 ```sh
 git clone https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills.git
 cd dsh-mcp-strong-and-skills
