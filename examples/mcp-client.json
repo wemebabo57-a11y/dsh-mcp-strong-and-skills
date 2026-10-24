@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "strong": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/dsh-strong-skills/bin/strong.mjs",
+        "serve",
+        "--root",
+        "/absolute/path/to/your-project",
+        "--profile",
+        "lean"
+      ]
+    }
+  }
+}

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
+  <title id="title">DSH Strong Skills — More capable. Less context.</title>
+  <desc id="desc">A lightweight DeepSeek Harness companion: eight on-demand coding skills, two bounded tool gateways, and a built-in MCP server with zero runtime dependencies.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#242720" stroke-opacity=".045"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="440" rx="20" fill="#f5f1e8"/>
+  <rect width="1200" height="440" rx="20" fill="url(#grid)"/>
+  <path d="M1077-65a248 248 0 0 1 248 248" fill="none" stroke="#cb603f" stroke-width="34" opacity=".12"/>
+  <path d="M1109-65a216 216 0 0 1 216 216" fill="none" stroke="#6d7950" stroke-width="2" opacity=".35"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#242720">
+    <rect x="54" y="46" width="10" height="10" rx="2" fill="#cb603f"/>
+    <text x="77" y="56" font-size="13" font-weight="700" letter-spacing="2.2">DEEPSEEK HARNESS / COMMUNITY PLUGIN</text>
+    <text x="51" y="160" font-size="73" font-weight="700" letter-spacing="-3">More capable.</text>
+    <text x="51" y="243" font-size="73" font-weight="700" letter-spacing="-3" fill="#cb603f">Less context.</text>
+    <text x="56" y="286" font-size="19" fill="#5e6357">Coding skills that show up when the work needs them.</text>
+    <path d="M56 324H688" stroke="#242720" stroke-opacity=".2"/>
+    <g font-family="Consolas, 'Courier New', monospace" font-size="13" font-weight="700" letter-spacing=".7">
+      <text x="56" y="363">08 SKILLS</text>
+      <text x="232" y="363">02 GATEWAYS</text>
+      <text x="439" y="363">00 RUNTIME DEPS</text>
+    </g>
+    <text x="56" y="403" font-size="12" fill="#777b70" letter-spacing="1.1">ON-DEMAND GUIDANCE. BOUNDED WORKSPACE CONTEXT. BUILT-IN MCP.</text>
+    <g transform="translate(773 111)">
+      <rect width="370" height="238" rx="14" fill="#fbf9f4" stroke="#d4d4c8"/>
+      <path d="M0 78H370M0 158H370" stroke="#deded3"/>
+      <g font-family="Consolas, 'Courier New', monospace" font-size="13" fill="#8a8d80">
+        <text x="24" y="43">01</text><text x="24" y="122">02</text><text x="24" y="202">03</text>
+      </g>
+      <g font-size="19" font-weight="700">
+        <text x="67" y="34">Skills</text><text x="67" y="113">Context</text><text x="67" y="193">MCP</text>
+      </g>
+      <g font-size="13" fill="#686e60">
+        <text x="67" y="55">Load the relevant playbook</text><text x="67" y="134">Read only what matters</text><text x="67" y="214">One server, two gateways</text>
+      </g>
+      <g fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m322 30 7 9-7 9m-11-18-7 9 7 9" stroke="#cb603f"/>
+        <path d="M305 110h22m-22 8h15m-15 8h19" stroke="#6d7950"/>
+        <path d="M307 186v8a8 8 0 0 0 16 0v-8m-12-4v9m8-9v9m-4 11v8" stroke="#242720"/>
+      </g>
+    </g>
+  </g>
+</svg>

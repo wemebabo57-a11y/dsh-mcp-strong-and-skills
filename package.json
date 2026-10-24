@@ -1,0 +1,24 @@
+{
+  "name": "dsh-strong-skills",
+  "version": "0.1.0",
+  "description": "Lean coding skills and bounded workspace tools for DeepSeek Harness, with a built-in stdio MCP server.",
+  "repository": { "type": "git", "url": "git+https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills.git" },
+  "homepage": "https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills#readme",
+  "bugs": { "url": "https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/issues" },
+  "type": "module",
+  "main": "./src/index.mjs",
+  "exports": { ".": "./src/index.mjs", "./engine": "./src/engine.mjs" },
+  "bin": { "dsh-strong": "./bin/strong.mjs" },
+  "files": ["src", "bin", "skills", "examples", "docs", "scripts", "test", "cordis.patch.yml", "README.md", "CONTRIBUTING.md", "SECURITY.md", "LICENSE"],
+  "engines": { "node": ">=24.9.0" },
+  "scripts": {
+    "test": "node --test",
+    "check": "node scripts/check.mjs",
+    "budget": "node bin/strong.mjs budget",
+    "mcp": "node bin/strong.mjs serve --root .",
+    "prepack": "npm run check && npm test"
+  },
+  "keywords": ["dsh-plugin", "deepseek-harness", "mcp", "skills", "coding"],
+  "license": "MIT",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
