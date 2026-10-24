@@ -29,7 +29,7 @@ On-demand skills. Bounded context. Built for DeepSeek Harness.
 
 ### 直接从 GitHub 安装（推荐）
 
-已有 `dsh` 命令时，可以直接从本仓库拉取并安装，无需先手动克隆：
+确保 `dsh` 和 `pnpm` 都在 PATH 中（可先运行 `dsh --help` 与 `pnpm --version` 检查），即可直接从本仓库拉取并安装，无需先手动克隆：
 
 ```sh
 # 下载仓库，并把插件加入 web profile
