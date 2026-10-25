@@ -30,7 +30,24 @@ test('generated patches contain real executable/module paths with YAML-safe quot
   const mcp = run(['config', '--mode', 'mcp', '--root', root, '--profile', 'lean']);
   assert.equal(mcp.status, 0, mcp.stderr);
   assert.equal(JSON.parse(mcp.stdout.match(/command: ("[^\n]+")/)[1]), process.execPath);
-  assert.match(mcp.stdout, /--profile, lean/);
+  const args = JSON.parse(mcp.stdout.match(/args: (.+)/)[1]);
+  assert.deepEqual(args.slice(-2), ['--profile', 'lean']);
+});
+
+test('CLI enhancement flags and generated patches preserve effective options', () => {
+  const budget = run(['budget', '--thinking', 'off', '--tools', 'compact', '--model', 'deepseek-v4-pro']);
+  assert.equal(budget.status, 0, budget.stderr);
+  const value = JSON.parse(budget.stdout);
+  assert.equal(value.enhancedThinking, false);
+  assert.equal(value.residentTools, 2);
+  assert.equal(value.modelProfile.apiModel, 'deepseek-v4-pro');
+  const native = run(['config', '--mode', 'native', '--root', root, '--thinking', 'off', '--model', 'deepseek-v4.1-flash-1017']);
+  assert.match(native.stdout, /enhancedThinking: false/);
+  assert.match(native.stdout, /modelPreset: "deepseek-v4\.1-flash-1017"/);
+  const code = run(['code', '--root', root, '--action', 'symbols', '--path', 'src/engine.mjs']);
+  assert.equal(code.status, 0, code.stderr);
+  assert.match(code.stdout, /StrongEngine/);
+  assert.equal(run(['budget', '--thinking', 'invalid']).status, 1);
 });
 
 test('invalid CLI usage fails visibly on stderr', () => {

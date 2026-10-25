@@ -3,23 +3,27 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { apply, inject, name } from '../src/index.mjs';
-import { TOOLS } from '../src/engine.mjs';
+import { apply, inject, name, Config } from '../src/index.mjs';
+import { TOOLS, BASE_TOOLS, buildPolicy } from '../src/engine.mjs';
 import { POLICY } from '../src/policy.mjs';
+import { snapshotConfig } from '../src/native-config.mjs';
 
 function host(ensure = async () => { throw new Error('Unexpected directory lookup'); }, defaultDirectory = process.cwd()) {
   const sections = [];
   const registrations = new Map();
+  const conditions = new Map();
   const ctx = {
     systemPrompt: { section: section => sections.push(section) },
-    tools: { register: definition => {
+    tools: { register: (definition, options) => {
       assert.equal(registrations.has(definition.name), false, 'Tool names must be unique');
       registrations.set(definition.name, definition);
+      conditions.set(definition.name, options?.when);
       return () => registrations.delete(definition.name);
     } },
     workingDirectory: { ensure, defaultDirectory },
   };
-  return { ctx, sections, registrations };
+  const visibleNames = () => [...registrations.keys()].filter(tool => !conditions.get(tool) || conditions.get(tool)());
+  return { ctx, sections, registrations, conditions, visibleNames };
 }
 
 async function temporaryWorkspace(t, marker) {
@@ -34,13 +38,20 @@ async function temporaryWorkspace(t, marker) {
   return root;
 }
 
-test('native plugin registers the compact policy and both canonical tools', () => {
-  const { ctx, sections, registrations } = host();
+test('native plugin registers a dynamic policy and four canonical tools', () => {
+  const { ctx, sections, registrations, conditions, visibleNames } = host();
   apply(ctx);
   assert.equal(name, 'strong-skills');
   assert.deepEqual(inject, ['tools', 'systemPrompt', 'workingDirectory']);
-  assert.deepEqual(sections, [{ name: 'strong-skills:policy', order: 650, text: POLICY, interpolate: false }]);
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].name, 'strong-skills:policy');
+  assert.equal(sections[0].order, 650);
+  assert.equal(sections[0].interpolate, false);
+  assert.equal(typeof sections[0].text, 'function');
+  assert.equal(sections[0].text(), buildPolicy());
   assert.deepEqual([...registrations.keys()], TOOLS.map(tool => tool.name));
+  assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
+  for (const tool of BASE_TOOLS) assert.equal(conditions.get(tool.name), undefined);
   for (const definition of registrations.values()) {
     assert.equal(definition.parameters.type, 'object');
     assert.equal(definition.output.schema.type, 'object');
@@ -51,6 +62,85 @@ test('native plugin registers the compact policy and both canonical tools', () =
     assert.equal(rendered[0].type, 'text');
     assert.deepEqual(JSON.parse(rendered[0].text), canonical);
     assert.equal(Object.hasOwn(canonical, 'content'), false, 'Rendering must not mutate the canonical value');
+  }
+});
+
+test('one native registration follows live thinking settings and keeps the base policy when off', () => {
+  const state = { enabled: true, level: 'balanced', clarification: 'more' };
+  const options = {
+    enhancedThinking: { get: () => state.enabled },
+    thinkingLevel: { get: () => state.level },
+    clarification: { get: () => state.clarification },
+    toolSet: 'compact',
+  };
+  const { ctx, sections } = host();
+  apply(ctx, options);
+  const render = sections[0].text;
+  const enabled = render();
+  assert.ok(enabled.startsWith(POLICY));
+  assert.ok(enabled.length > POLICY.length);
+  state.level = 'deep';
+  assert.notEqual(render(), enabled);
+  state.enabled = false;
+  assert.equal(render(), POLICY);
+  state.clarification = 'few';
+  assert.equal(render(), POLICY, 'The off switch also disables clarification additions');
+  state.enabled = true;
+  assert.equal(render(), buildPolicy({ toolSet: 'compact', thinkingLevel: 'deep', clarification: 'few' }));
+  assert.equal(sections.length, 1, 'Live updates do not add duplicate sections');
+});
+
+test('native auto policy uses each captured step model without mutating request selection', () => {
+  const { ctx, sections } = host();
+  apply(ctx);
+  const pro = Object.freeze({ provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'low' });
+  const flash = Object.freeze({ provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' });
+  const render = sections[0].text;
+  assert.match(render({ modelSelection: pro }), /Pro：/);
+  assert.doesNotMatch(render({ modelSelection: pro }), /Flash：/);
+  assert.match(render({ modelSelection: flash }), /Flash：/);
+  assert.doesNotMatch(render({ modelSelection: flash }), /Pro：/);
+  assert.doesNotMatch(render(), /Pro：|Flash：/);
+  assert.deepEqual(pro, { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'low' });
+  assert.deepEqual(flash, { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' });
+});
+
+test('live compact tools disappear from discovery and reject execution until expanded again', async t => {
+  const root = await temporaryWorkspace(t, 'dynamic tools');
+  await fs.writeFile(path.join(root, 'sample.mjs'), 'export function sample(value) { return value; }\n', 'utf8');
+  let toolSet = 'expanded';
+  const { ctx, registrations, visibleNames } = host(undefined, root);
+  apply(ctx, { toolSet: { get: () => toolSet } });
+  const execution = { signal: new AbortController().signal };
+  const code = registrations.get('strong_code');
+  const args = { action: 'symbols', path: 'sample.mjs' };
+  const first = await code.execute(args, execution);
+  assert.ok(JSON.stringify(first).includes('sample'));
+  toolSet = 'compact';
+  assert.deepEqual(visibleNames(), BASE_TOOLS.map(tool => tool.name));
+  await assert.rejects(code.execute(args, execution), /Unknown tool/);
+  await assert.rejects(registrations.get('strong_review').execute({}, execution), /Unknown tool/);
+  const base = await registrations.get('strong_context').execute({ action: 'read', path: 'marker.txt' }, execution);
+  assert.equal(base.lines[0].text, 'dynamic tools');
+  toolSet = 'expanded';
+  assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
+  assert.deepEqual(await code.execute(args, execution), first);
+});
+
+test('native Standard Schema validates defaults and rejects invalid settings', async () => {
+  const standard = Config['~standard'];
+  assert.equal(standard.version, 1);
+  const defaults = await standard.validate({});
+  assert.equal(defaults.issues, undefined);
+  const config = snapshotConfig(defaults.value);
+  assert.equal(config.enhancedThinking, true);
+  assert.equal(config.thinkingLevel, 'balanced');
+  assert.equal(config.clarification, 'more');
+  assert.equal(config.modelPreset, 'auto');
+  assert.equal(config.toolSet, 'expanded');
+  for (const invalid of [{ enhancedThinking: 'false' }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { maxFiles: 1 }]) {
+    const result = await standard.validate(invalid);
+    assert.ok(result.issues?.length, JSON.stringify(invalid));
   }
 });
 
@@ -145,7 +235,7 @@ test('directory provider failures propagate instead of falling back to the host 
 });
 
 test('invalid native configuration fails before contributing prompts or tools', () => {
-  for (const options of [null, [], { profile: 'unlimited' }, { maxSkillLoads: 3 }, { unknown: true }]) {
+  for (const options of [null, [], { profile: 'unlimited' }, { maxSkillLoads: 3 }, { unknown: true }, { enhancedThinking: { get: () => 'false' } }, { toolSet: { get: () => 'all' } }]) {
     const { ctx, sections, registrations } = host();
     assert.throws(() => apply(ctx, options));
     assert.equal(sections.length, 0);

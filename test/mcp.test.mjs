@@ -7,8 +7,8 @@ import { once } from 'node:events';
 const executable = fileURLToPath(new URL('../bin/strong.mjs', import.meta.url));
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-function client(t, profile = 'balanced') {
-  const child = spawn(process.execPath, [executable, 'serve', '--root', root, '--profile', profile], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+function client(t, profile = 'balanced', options = []) {
+  const child = spawn(process.execPath, [executable, 'serve', '--root', root, '--profile', profile, ...options], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   let buffer = '';
   let stderr = '';
   const waiting = new Map();
@@ -55,9 +55,9 @@ test('stdio initialize, tool discovery, on-demand skills, resources and bounded 
   const c = client(t, 'lean');
   const init = await initialize(c);
   assert.deepEqual(init.capabilities, { tools: {}, resources: {} });
-  assert.ok(init.instructions.length < 500);
+  assert.ok(init.instructions.length < 1000);
   const listed = await c.request(2, 'tools/list', {});
-  assert.equal(listed.result.tools.length, 2);
+  assert.equal(listed.result.tools.length, 4);
   assert.equal(JSON.stringify(listed).includes('先理解用户'), false, 'skill bodies stay out of discovery');
   const loaded = await c.request(3, 'tools/call', { name: 'strong_skill', arguments: { query: '修复崩溃错误' } });
   assert.equal(loaded.result.isError, false);
@@ -73,6 +73,26 @@ test('stdio initialize, tool discovery, on-demand skills, resources and bounded 
   assert.equal(value.lines.length, 3);
   assert.ok(context.result.content[0].text.length <= 4000);
   assert.equal(c.stderr, '');
+});
+
+test('MCP compact/off removes optional tools and enhancement policy', async t => {
+  const c = client(t, 'lean', ['--thinking', 'off', '--tools', 'compact']);
+  const init = await initialize(c);
+  const listed = await c.request(2, 'tools/list');
+  assert.deepEqual(listed.result.tools.map(tool => tool.name), ['strong_skill', 'strong_context']);
+  assert.equal(init.instructions.includes('增强编码'), false);
+  assert.equal((await c.request(3, 'tools/call', { name: 'strong_code', arguments: { action: 'symbols' } })).error.code, -32602);
+});
+
+test('MCP expanded coding tools return real bounded symbols and parsed diagnostics', async t => {
+  const c = client(t);
+  await initialize(c);
+  const symbols = await c.request(2, 'tools/call', { name: 'strong_code', arguments: { action: 'symbols', path: 'src/engine.mjs' } });
+  assert.equal(symbols.result.isError, false);
+  assert.match(symbols.result.content[0].text, /StrongEngine/);
+  const review = await c.request(3, 'tools/call', { name: 'strong_review', arguments: { path: 'src' } });
+  assert.equal(review.result.isError, false);
+  assert.ok(JSON.parse(review.result.content[0].text));
 });
 
 test('stdio reports protocol errors separately from tool execution errors', async t => {

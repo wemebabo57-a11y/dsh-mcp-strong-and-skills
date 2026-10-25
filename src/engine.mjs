@@ -2,8 +2,11 @@ import { Workspace } from './workspace.mjs';
 import { resolveConfig } from './config.mjs';
 import { selectSkills } from './skills.mjs';
 import { POLICY, estimateTokens } from './policy.mjs';
+import { buildEnhancementPolicy } from './thinking.mjs';
+import { getModelProfile } from './models.mjs';
+import { EXTRA_TOOLS, runCodeTool } from './code-tools.mjs';
 
-export const TOOLS = Object.freeze([
+export const BASE_TOOLS = Object.freeze([
   { name: 'strong_skill', description: '按需选择内置代码技能。query 匹配并加载最相关正文；id 精确加载；无参数列目录。简单任务无需调用。',
     inputSchema: { type: 'object', properties: {
       query: { type: 'string', maxLength: 500, description: '任务或技能关键词，中英文均可' },
@@ -19,6 +22,19 @@ export const TOOLS = Object.freeze([
       limit: { type: 'integer', minimum: 1, maximum: 200 },
     }, required: ['action'], additionalProperties: false } },
 ]);
+
+export const TOOLS = Object.freeze([...BASE_TOOLS, ...EXTRA_TOOLS]);
+
+export function toolsForConfig(options = {}) {
+  const config = resolveConfig(options);
+  return config.toolSet === 'compact' ? BASE_TOOLS : TOOLS;
+}
+
+export function buildPolicy(options = {}, context = {}) {
+  const config = resolveConfig(options);
+  const enhancement = buildEnhancementPolicy(config, context);
+  return [POLICY, config.toolSet === 'expanded' ? '复杂代码定位可用 strong_code 提取符号、导入与诊断；修改后可用 strong_review 提取差异风险与验证建议。它们提供线索，仍需实际验证。' : '', enhancement].filter(Boolean).join('\n');
+}
 
 export function validateArguments(schema, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Arguments must be an object');
@@ -68,24 +84,29 @@ export class StrongEngine {
   }
   async call(name, args = {}, { signal } = {}) {
     signal?.throwIfAborted();
-    const tool = TOOLS.find(tool => tool.name === name);
+    const tool = toolsForConfig(this.config).find(tool => tool.name === name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
     validateArguments(tool.inputSchema, args);
     if (name === 'strong_skill' && args.id && args.query) throw new Error('Supply id or query, not both');
     const value = name === 'strong_skill'
       ? await selectSkills(args, this.config, signal)
-      : await this.workspace.run(args, { signal });
+      : name === 'strong_context'
+        ? await this.workspace.run(args, { signal })
+        : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
     signal?.throwIfAborted();
     return boundResult(value, this.config.maxOutputChars);
   }
 }
 
-export function budgetReport(options = {}) {
+export function budgetReport(options = {}, context = {}) {
   const config = resolveConfig(options);
-  const toolText = JSON.stringify(TOOLS);
-  return { profile: config.profile, residentTools: TOOLS.length, residentSkillBodies: 0,
-    policyChars: POLICY.length, toolSchemaChars: toolText.length,
-    approximateResidentTokens: estimateTokens(POLICY) + estimateTokens(toolText),
+  const toolText = JSON.stringify(toolsForConfig(config));
+  const policy = buildPolicy(config, context);
+  return { profile: config.profile, toolSet: config.toolSet, residentTools: toolsForConfig(config).length, residentSkillBodies: 0,
+    enhancedThinking: config.enhancedThinking, thinkingLevel: config.thinkingLevel, clarification: config.clarification,
+    modelProfile: getModelProfile(context.selection ?? context.modelId, config), nativeReasoning: 'host-controlled',
+    policyChars: policy.length, toolSchemaChars: toolText.length,
+    approximateResidentTokens: estimateTokens(policy) + estimateTokens(toolText),
     maxResultChars: config.maxOutputChars, maxFiles: config.maxFiles, maxSkillLoads: config.maxSkillLoads,
     note: '字符启发式估算，非 DeepSeek tokenizer 或账单统计；仅统计本插件增量，MCP 工具名前缀和宿主包装未计入。' };
 }

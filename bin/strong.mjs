@@ -11,8 +11,14 @@ const HELP = `dsh-strong — DeepSeek Harness 编码增强
   skill   [--id debug | --query "修复登录错误"] [--limit 1|2]   按需技能
   inspect --root <项目目录> --action map|search|read|diff|checks|style
           [--path src] [--query keyword] [--start 1] [--limit 80]
+  code    --root <项目目录> --action symbols|imports|diagnostics [--path src] [--text 报错]
+  review  --root <项目目录> [--path src] [--limit 40]           差异与风险建议
   config  --mode native|mcp --root <项目目录> [--profile balanced]  输出 DSH patch
   budget  [--profile lean|balanced|thorough]                     上下文开销估算
+
+通用增强选项：--thinking on|off --thinking-level balanced|deep
+              --clarification auto|more|few --model auto|deepseek-v4-pro|deepseek-v4.1-flash-1017|generic
+              --tools compact|expanded
 
 不写用户配置。config 将可用的绝对路径 patch 打印到 stdout。`;
 
@@ -31,13 +37,27 @@ export function parseArgs(argv) {
 }
 
 function checkOptions(command, options) {
+  const common = ['profile', 'thinking', 'thinking-level', 'clarification', 'model', 'tools'];
   const allowed = {
-    serve: ['root', 'profile'], skill: ['id', 'query', 'limit', 'profile'],
-    inspect: ['root', 'action', 'path', 'query', 'start', 'limit', 'profile'],
-    config: ['mode', 'root', 'profile'], budget: ['profile'], help: [], '--help': [], '-h': [],
+    serve: ['root', ...common], skill: ['id', 'query', 'limit', ...common],
+    inspect: ['root', 'action', 'path', 'query', 'start', 'limit', ...common],
+    code: ['root', 'action', 'path', 'text', 'limit', ...common], review: ['root', 'path', 'limit', ...common],
+    config: ['mode', 'root', ...common], budget: common, help: [], '--help': [], '-h': [],
   }[command];
   if (!allowed) throw new Error(`Unknown command: ${command}`);
   for (const key of Object.keys(options)) if (!allowed.includes(key)) throw new Error(`Unknown option for ${command}: --${key}`);
+}
+
+export function optionsToConfig(options) {
+  const config = {};
+  for (const [flag, field] of [['profile', 'profile'], ['thinking-level', 'thinkingLevel'], ['clarification', 'clarification'], ['model', 'modelPreset'], ['tools', 'toolSet']]) {
+    if (options[flag] !== undefined) config[field] = options[flag];
+  }
+  if (options.thinking !== undefined) {
+    if (!['on', 'off'].includes(options.thinking)) throw new Error('--thinking must be on or off');
+    config.enhancedThinking = options.thinking === 'on';
+  }
+  return config;
 }
 
 async function projectRoot(value) {
@@ -51,7 +71,7 @@ export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
   checkOptions(command, options);
   if (['help', '--help', '-h'].includes(command)) { process.stdout.write(HELP + '\n'); return; }
-  const config = options.profile ? { profile: options.profile } : {};
+  const config = optionsToConfig(options);
   // Resolve/validate profile even for config generation.
   const budget = budgetReport(config);
   if (command === 'budget') { process.stdout.write(JSON.stringify(budget, null, 2) + '\n'); return; }
@@ -65,14 +85,19 @@ export async function main(argv = process.argv.slice(2)) {
     const directory = fileURLToPath(new URL('../', import.meta.url));
     const quote = value => JSON.stringify(value); // JSON strings are valid YAML scalars; no shell interpolation.
     if (options.mode === 'native') {
-      process.stdout.write(`- insert:\n    - id: strong-skills\n      name: ${quote(fileURLToPath(new URL('../src/index.mjs', import.meta.url)))}\n      config:\n        profile: ${budget.profile}\n`);
+      const fields = { profile: budget.profile, ...config };
+      process.stdout.write(`- insert:\n    - id: strong-skills\n      name: ${quote(fileURLToPath(new URL('../src/index.mjs', import.meta.url)))}\n      config:\n${Object.entries(fields).map(([key, value]) => `        ${key}: ${quote(value)}`).join('\n')}\n`);
     } else if (options.mode === 'mcp') {
-      process.stdout.write(`- insert:\n    - id: strong-skills-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: strong\n        transport: stdio\n        command: ${quote(process.execPath)}\n        args: [${quote(resolve(directory, 'bin/strong.mjs'))}, serve, --root, ${quote(root)}, --profile, ${budget.profile}]\n        cwd: ${quote(root)}\n`);
+      const args = [resolve(directory, 'bin/strong.mjs'), 'serve', '--root', root, '--profile', budget.profile];
+      for (const key of ['thinking', 'thinking-level', 'clarification', 'model', 'tools']) if (options[key] !== undefined) args.push(`--${key}`, options[key]);
+      process.stdout.write(`- insert:\n    - id: strong-skills-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: strong\n        transport: stdio\n        command: ${quote(process.execPath)}\n        args: ${quote(args)}\n        cwd: ${quote(root)}\n`);
     } else throw new Error('--mode must be native or mcp');
     return;
   }
-  const args = Object.fromEntries(['action', 'path', 'query', 'start', 'limit'].filter(key => options[key] !== undefined).map(key => [key, ['start', 'limit'].includes(key) ? Number(options[key]) : options[key]]));
-  process.stdout.write(JSON.stringify(await new StrongEngine(root, config).call('strong_context', args), null, 2) + '\n');
+  const fields = command === 'review' ? ['path', 'limit'] : command === 'code' ? ['action', 'path', 'text', 'limit'] : ['action', 'path', 'query', 'start', 'limit'];
+  const args = Object.fromEntries(fields.filter(key => options[key] !== undefined).map(key => [key, ['start', 'limit'].includes(key) ? Number(options[key]) : options[key]]));
+  const tool = command === 'review' ? 'strong_review' : command === 'code' ? 'strong_code' : 'strong_context';
+  process.stdout.write(JSON.stringify(await new StrongEngine(root, config).call(tool, args), null, 2) + '\n');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

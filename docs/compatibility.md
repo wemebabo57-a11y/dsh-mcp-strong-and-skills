@@ -1,6 +1,20 @@
 # DeepSeek Harness compatibility
 
-Checked on 2026-10-24 against official upstream source and the npm registry. This is a contract review, not a claim that a full Harness instance has been started locally.
+Initial contract review on 2026-10-24; updated for v0.2 on 2026-10-25 against official upstream source and an isolated real DSH 0.2.1-rc.3 Web instance.
+
+## v0.2 live configuration and client surface
+
+The native entry now exports a Schemastery `Config`. Each editable field is `.volatile()` and the runtime reads its stable reference with `.get()` for every prompt assembly and tool call. The native integration declares `@deepseek-ai/schemastery@~3.18.5` as an optional host peer; CLI/MCP do not import it. Real Schemastery 3.18.5 was used to validate volatile fields, defaults, and conversion to effective runtime settings. Without a Harness host, the entry supplies a Standard Schema fallback for standalone contract tests; that fallback is not a substitute for a live settings form.
+
+The browser entry is a committed lazy client-factory bundle at `client/client.js`, declared by `dsh.client` and `exports["./client"]`. It uses host-provided React and the existing `slots`, `locale`, and `configForms` services. There is no installation-time build or bundled second copy of React.
+
+The page registers both `settings.section` (`strong-skills`) and keyed `plugins.bundle.config` (`dsh-strong-skills`). It is shown only while the Host serves the `strong-skills` Config form. Reads, writes, resets, revision fencing, and accepted-value recovery go through the real ConfigForms contract; no localStorage or private HTTP API is used. The optional host settings presentation policy is registered against the owning plugin fiber. [Settings Config projection](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/settings/settings/README.md), [client form contracts](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-settings/src/client/config-form-types.ts), [Settings slots](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-settings/src/client/contract/slots.ts), [plugin configuration slots](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-plugin-manager/README.md).
+
+Prompt callbacks use the current step's captured `modelSelection`. Optional tools have live registration `when` predicates, and their dispatch is also rejected when disabled. Reasoning effort and actual model/provider selection stay host-owned. Older Harness versions lacking volatile Config or these client contracts cannot provide this settings surface and should be upgraded before use.
+
+Verification covers the real schema library, controller and slot integration fixtures, generated bundle freshness, real React rendering in desktop/mobile browser previews, native execution contracts and stdio protocol subprocesses. The actual rc.3 Web host was also installed under an isolated DSH_HOME, the bundle linked with `dsh plugin`, and the dedicated Settings page opened in a real browser. The enhanced-thinking switch changed true → false, remained false after reload, and was restored to true. Runtime browser errors were empty. Test browser requests stayed on localhost; no model generation or chat message was sent. This confirms settings-page loading and persistence, not a coding benchmark or exhaustive provider integration.
+
+The v0.2 package declares `engines.dsh: ">=0.2.1-rc.3 <0.3.0"`. rc.2 remains the initial npm latest observation below, not a claim of v0.2 surface compatibility. Launcher options must precede application arguments: use `dsh --profile web --patch /absolute/path/to/overlay.yml`, rather than appending `--patch` after the `web` shorthand in this tested release.
 
 ## Version boundary
 
@@ -55,7 +69,7 @@ An installable package declares `"dsh": { "bundle": { "patch": "./cordis.patch.y
       name: dsh-example-enhancement
 ```
 
-Install a local checkout with `dsh plugin --profile web add /absolute/path/to/package`, inspect with `dsh --profile web --dump-config`, then restart the selected profile. For a temporary overlay use an absolute plugin module path and launch `dsh web --patch /absolute/path/to/overlay.yml`. A patch replaces a row's whole `config`; it does not recursively merge it. Shared DSH runtime imports belong in `peerDependencies` and `devDependencies`; independent schema validators belong in `dependencies`. [Official packaging and profile tutorial](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md).
+Install a local checkout with `dsh plugin --profile web add /absolute/path/to/package`, inspect with `dsh --profile web --dump-config`, then restart the selected profile. For a temporary overlay use an absolute plugin module path and launch `dsh --profile web --patch /absolute/path/to/overlay.yml`. A patch replaces a row's whole `config`; it does not recursively merge it. Shared DSH runtime imports belong in `peerDependencies` and `devDependencies`; independent schema validators belong in `dependencies`. [Official packaging and profile tutorial](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md).
 
 ## Built-in MCP bridge
 
@@ -69,7 +83,7 @@ Harness supports one `@deepseek-ai/dsh-mcp-client` row per server. A local embed
         serverName: enhancement
         transport: stdio
         command: node
-        args: ['/absolute/path/to/package/bin/mcp.mjs']
+        args: ['/absolute/path/to/package/bin/strong.mjs', serve, --root, '/absolute/path/to/project']
         cwd: '/absolute/path/to/project'
 ```
 

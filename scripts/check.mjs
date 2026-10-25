@@ -5,9 +5,9 @@ import { SKILL_CATALOG, loadSkill } from '../src/skills.mjs';
 import { budgetReport } from '../src/engine.mjs';
 
 const root = new URL('../', import.meta.url);
-for (const directory of ['src', 'bin', 'scripts', 'test']) {
+for (const directory of ['src', 'bin', 'client', 'scripts', 'test']) {
   for (const file of await readdir(new URL(`${directory}/`, root))) {
-    if (!file.endsWith('.mjs')) continue;
+    if (!/\.[cm]?js$/.test(file)) continue;
     const result = spawnSync(process.execPath, ['--check', fileURLToPath(new URL(`${directory}/${file}`, root))], { encoding: 'utf8' });
     if (result.status !== 0) throw new Error(result.stderr || `Syntax check failed: ${file}`);
   }
@@ -19,5 +19,9 @@ for (const skill of SKILL_CATALOG) {
 const pkg = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
 if (pkg.dependencies && Object.keys(pkg.dependencies).length) throw new Error('Runtime must remain dependency-free');
 const budget = budgetReport();
-if (budget.approximateResidentTokens > 1600 || budget.residentTools !== 2) throw new Error('Resident context budget exceeded');
+if (budget.approximateResidentTokens > 1600 || budget.residentTools !== 4) throw new Error('Resident context budget exceeded');
+const compact = budgetReport({ toolSet: 'compact', enhancedThinking: false });
+if (compact.residentTools !== 2 || compact.approximateResidentTokens > 650) throw new Error('Compact mode budget exceeded');
+const ui = spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build-ui.mjs', root)), '--check'], { encoding: 'utf8' });
+if (ui.status !== 0) throw new Error(ui.stderr || ui.stdout || 'Client bundle check failed');
 process.stdout.write(JSON.stringify({ syntax: 'ok', skills: SKILL_CATALOG.length, budget }, null, 2) + '\n');

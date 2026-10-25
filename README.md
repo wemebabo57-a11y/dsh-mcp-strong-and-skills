@@ -9,23 +9,23 @@ On-demand skills. Bounded context. Built for DeepSeek Harness.
 [![CI](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-cb603f?style=flat-square)](LICENSE)
 [![Runtime dependencies: 0](https://img.shields.io/badge/runtime_dependencies-0-242720?style=flat-square)](package.json)
-[![Tests: 52](https://img.shields.io/badge/tests-52-6d7950?style=flat-square)](test)
+[![Tests: Node.js](https://img.shields.io/badge/tests-Node.js-6d7950?style=flat-square)](test)
 
-[快速开始](#快速开始) · [能力一览](#能力一览) · [MCP 接入](#mcp-接入) · [上下文预算](#上下文预算) · [参与贡献](#参与贡献)
+[快速开始](#快速开始) · [插件设置](#插件设置与增强思考) · [能力一览](#能力一览) · [MCP 接入](#mcp-接入) · [上下文预算](#上下文预算)
 
 </div>
 
-![8 个按需技能、2 个工具入口、零运行时依赖](docs/assets/hero.svg)
+![8 个按需技能、4 个工具入口、轻量上下文](docs/assets/hero.svg)
 
-面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的轻量编码增强插件。通过 **8 个按需技能、2 个工具入口**，补足交付方法、仓库上下文和设计指导；同时提供独立的 **stdio MCP 服务**，可接入其他 MCP 客户端。
+面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的轻量编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略**。内置 8 个按需技能、4 个工具入口、可关闭的增强思考，以及独立的 stdio MCP 服务。
 
 模型继续使用宿主当前 profile 启用的编辑、终端、联网、浏览器与子代理工具。本插件在本地加载技能、检索文件，不在后台发起模型请求。
 
-> **验证状态：** 本地 52 项测试覆盖技能路由、原生宿主契约模拟和真实 stdio 子进程通信。原生插件尚未在真实 DSH 实例中完成端到端验证；支持依据与版本边界见[兼容性记录](docs/compatibility.md)。
+> **验证状态：** 94 项自动化测试通过；已在真实 DSH 0.2.1-rc.3 中验证独立设置页，以及增强开关关闭、刷新保持与恢复开启。中英文 320–420px 组件预览无溢出。没有发起付费模型请求，尚未进行模型能力基准评测，见[兼容性记录](docs/compatibility.md)。
 
 ## 快速开始
 
-需要 **Node.js 24.9+**；接入原生插件还需已安装 DSH。源码可直接运行，无需构建或 `npm install`。
+需要 **Node.js 24.9+**；原生插件要求 **DSH 0.2.1-rc.3 或同一兼容版本范围内的更新版本**。CLI/MCP 无第三方运行依赖；原生设置复用宿主提供的 Schemastery 配置库。浏览器分发文件已提交，安装时无需构建。旧宿主应先升级，以获得 volatile Config 与当前客户端插槽。
 
 ### 直接从 GitHub 安装（推荐）
 
@@ -39,12 +39,14 @@ dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills
 dsh --profile web --dump-config
 
 # 启动；已有 DSH 进程请先退出再重新启动
-dsh web --profile web
+dsh --profile web
 ```
 
 这是 [DSH 官方支持的 GitHub 安装方式](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md#installing-from-github-the-build-script-catch)。DSH 会下载源码、安装包并加载其 `dsh.bundle` 配置；本项目入口是可直接运行的 `.mjs`，不需要编译。仓库名是 `dsh-mcp-strong-and-skills`，安装后的包名是 **`dsh-strong-skills`**。
 
 使用其他 profile 时，将以上三条命令中的 `web` 一起替换为实际名称。插件安装在 profile 中，不需要在每个代码项目里重复安装。
+
+从旧版升级时，重新执行上面的 GitHub 安装命令，再重启相同 profile，即可拉取当前分支的更新。v0.2 新增独立设置页与扩展工具；完整变化见[更新记录](CHANGELOG.md)。
 
 需要固定代码版本时，可在仓库来源后追加 `#提交SHA`，例如安装已发布的初始代码提交：
 
@@ -73,7 +75,7 @@ node bin/strong.mjs inspect --root . --action map --limit 30
 # 将本地插件安装到 web profile，然后检查并启动
 dsh plugin --profile web add .
 dsh --profile web --dump-config
-dsh web --profile web
+dsh --profile web
 ```
 
 安装命令会修改所选 DSH profile。原生模式会在每次调用时解析 **DSH 当前会话的工作目录**，适合多项目使用与目录切换。
@@ -82,10 +84,33 @@ dsh web --profile web
 
 ```sh
 node bin/strong.mjs config --mode native --root . > strong.native.patch.yml
-dsh web --patch /absolute/path/to/strong.native.patch.yml
+dsh --profile web --patch /absolute/path/to/strong.native.patch.yml
 ```
 
 将 `/absolute/path/to/…` 替换为本机绝对路径；Windows 可用 `C:/path/to/…`。生成配置只创建本地 patch，不改 DSH 用户配置。已安装原生插件时，不要再叠加同一原生 patch。原生模式中的 `--root` 仅验证目录，不固定会话目录。
+
+## 插件设置与增强思考
+
+原生插件启用后，打开 **设置 → Strong Skills**。也可从 **插件 → dsh-strong-skills** 查看同一配置面板。更改通过 DSH 的 ConfigForms 保存至当前 profile，并在下一次请求/工具调用时读取；不使用浏览器本地存储代替宿主设置。表单保留只读、保存中、写入被拒绝和连接失败状态。
+
+![真实 DSH rc.3 中的 Strong Skills 独立设置页](docs/assets/settings.png)
+
+上图来自隔离的真实 DSH rc.3 测试实例，界面继承宿主主题。测试已验证关闭后刷新仍保持关闭，再恢复开启。
+
+| 设置 | 默认值 | 效果 |
+| --- | --- | --- |
+| 增强思考 | 开启 | 所有模型获得规划、契约核对、失败边界检查与有依据的验证指导 |
+| 思考等级 | 均衡 | 深度模式增加一次有上限的反例检查，避免无限自审 |
+| 澄清频率 | 多问一些 | 缺少会影响实现的关键信息时，合并询问 1–3 个问题；简单任务继续执行 |
+| 模型策略 | 自动 | 识别官方 DeepSeek 别名使用专用策略；其他模型使用完整通用增强 |
+| 工具集 | 扩展 | 4 个入口；精简模式保留 `strong_skill` 与 `strong_context` |
+| 资源档位 | 均衡 | 控制扫描与输出上限；高级限制可单独覆盖 |
+
+**关闭“增强思考”会移除插件额外的规划、自审、模型专用指导与澄清策略**，基础技能和工具仍可使用。插件的增强开关不改写服务商原生的 thinking / reasoning effort 参数；实际模型与 API 推理强度仍由 DSH 的模型设置决定。
+
+通用增强对任何模型开放，不以 DeepSeek 为使用条件。Pro 专用策略侧重依赖关系、架构取舍与兼容性；Flash 专用策略侧重符号/诊断定位、小步验证和有依据的失败恢复。专用策略会遵循当前可用工具集，不引用已关闭的工具。
+
+官方 API 的 `deepseek-v4-pro` 与 `deepseek-flash` 是滚动别名；截至 2026-10-25，后者对应 V4.1 Flash 1017。设置中的 `deepseek-v4.1-flash-1017` 是本插件的策略标识，**不会作为不存在的官方 API 模型名发送**，也不能锁定远端权重。自托管或代理使用其他模型标识时，可手动选择策略。详见[模型策略说明](docs/model-strategies.md)与[官方模型文档](https://api-docs.deepseek.com/quick_start/pricing/)。
 
 ## 能力一览
 
@@ -106,7 +131,7 @@ dsh web --patch /absolute/path/to/strong.native.patch.yml
 
 前端技能优先尊重用户要求与现有品牌。新界面默认避免深蓝底、蓝紫渐变、无意义光晕和重复的大标题卡片，鼓励根据内容选择视觉方向。这些是指令与启发式建议，不能保证模型每次都遵守。
 
-### 2 个工具入口
+### 4 个工具入口
 
 | 工具 | 调用方式 | 返回内容 |
 | --- | --- | --- |
@@ -117,6 +142,10 @@ dsh web --patch /absolute/path/to/strong.native.patch.yml
 | ↳ | `action: "diff"` | Git 工作树中未暂存的跟踪文件差异 |
 | ↳ | `action: "checks"` | 已有项目脚本与验证配置，供模型选择执行 |
 | ↳ | `action: "style"` | 常见默认配色与渐变的启发式建议，附文件位置 |
+| `strong_code` | `action: "symbols"` | 有行号的声明、类、函数与导出索引 |
+| ↳ | `action: "imports"` | 有界的静态 JS/TS 导入图与外部包摘要 |
+| ↳ | `action: "diagnostics"` + `text` | 解析构建/检查报错，并补充安全可读的源码位置 |
+| `strong_review` | 可选 `path` | 实际 diff 的风险位置、相关测试与已有检查建议 |
 
 原生工具的参数示例：
 
@@ -138,10 +167,10 @@ dsh web --patch /absolute/path/to/strong.native.patch.yml
 
 ```sh
 node bin/strong.mjs config --mode mcp --root /absolute/path/to/your-project > strong.mcp.patch.yml
-dsh web --patch /absolute/path/to/strong.mcp.patch.yml
+dsh --profile web --patch /absolute/path/to/strong.mcp.patch.yml
 ```
 
-官方桥将工具命名为 `mcp__strong__strong_skill` 和 `mcp__strong__strong_context`，详见 [DSH MCP 桥文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)。
+官方桥给工具添加 `mcp__strong__` 前缀，例如 `mcp__strong__strong_code`。默认扩展模式提供 4 个工具，详见 [DSH MCP 桥文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)。
 
 **其他 MCP 客户端：** 参考[完整配置示例](examples/mcp-client.json)，将以下路径替换为本机绝对路径：
 
@@ -168,9 +197,21 @@ dsh web --patch /absolute/path/to/strong.mcp.patch.yml
 
 服务只读取启动时指定的项目根目录；切换项目需重启服务。stdout 专用于 JSON-RPC，诊断写入 stderr。支持 tools、resources 与 `strong://skills/<id>` 技能资源；支持协商 `2025-11-25`、`2025-06-18`、`2025-03-26`、`2024-11-05` 协议版本。
 
+独立 MCP 服务不继承 DSH 的设置页状态。可用启动参数选择增强方式，例如关闭额外思考并使用精简工具，或为自定义路由指定 Flash 策略：
+
+```sh
+node bin/strong.mjs serve --root /absolute/path/to/project --thinking off --tools compact
+node bin/strong.mjs serve --root /absolute/path/to/project --model deepseek-v4.1-flash-1017 --thinking-level deep
+```
+
 ## 上下文预算
 
-常驻内容只有简短策略与两个工具 schema，**不预载技能正文**。当前字符启发式估算约 **606 tokens**，可运行 `npm run budget` 复算。该数字不是 DeepSeek tokenizer 结果或账单测量，不包含宿主上下文、MCP 名称前缀与包装；实际开销与节省效果需在真实任务中测量。
+默认扩展工具与均衡增强约 **1,104 tokens**；切换为精简工具并关闭增强思考可回到约 **606 tokens**。所有模式都**不预载技能正文**，不会后台调用模型或运行隐藏的多轮评审。数字为字符启发式估算，不是 DeepSeek tokenizer 或账单测量，也未计入宿主上下文与 MCP 包装，可自行复算：
+
+```sh
+node bin/strong.mjs budget
+node bin/strong.mjs budget --thinking off --tools compact
+```
 
 | Profile | 单次结果字符上限 | 最多扫描文件 | 每次最多加载技能 |
 | --- | ---: | ---: | ---: |
@@ -180,17 +221,19 @@ dsh web --patch /absolute/path/to/strong.mcp.patch.yml
 
 表中上限是 **字符数**。默认检索只返回片段；过长结果保留合法 JSON 并标注截断，模型应缩小范围或按行读取。
 
-原生插件配置还支持 `maxOutputChars`（2,000–20,000）、`maxFiles`（20–5,000）、`maxFileBytes`（1,024–262,144）、`maxSkillLoads`（1–2）。通过 `brandIntent` 描述既有品牌，或设置 `allowBrandColors: true`，可让样式检查尊重品牌配色。CLI 仅暴露 profile 切换，完整字段通过 DSH patch 配置。
+原生插件配置还支持 `maxOutputChars`（2,000–20,000）、`maxFiles`（20–5,000）、`maxFileBytes`（1,024–262,144）、`maxSkillLoads`（1–2），均可在设置页的高级限制中修改。通过 `brandIntent` 描述既有品牌，或设置 `allowBrandColors: true`，可让样式检查尊重品牌配色。
 
 ## 工作方式与边界
 
 ```mermaid
 flowchart LR
-    Host[DSH / MCP 客户端] --> Gateway[简短策略 + 2 个工具]
+    Host[DSH / MCP 客户端] --> Gateway[通用增强 + 可选 DeepSeek 策略]
     Gateway --> Skills[strong_skill · 按需加载技能]
     Gateway --> Context[strong_context · 限量读取仓库]
+    Gateway --> Code[strong_code / strong_review]
     Skills --> Model[模型结合宿主工具完成任务]
     Context --> Model
+    Code --> Model
 ```
 
 - 仓库工具只读，不执行项目脚本或任意命令。`checks` 返回的建议由模型结合任务与宿主权限决定是否执行。
@@ -204,6 +247,8 @@ flowchart LR
 node bin/strong.mjs skill --id frontend-design
 node bin/strong.mjs inspect --root . --action read --path package.json --start 1 --limit 20
 node bin/strong.mjs inspect --root . --action checks
+node bin/strong.mjs code --root . --action symbols --path src/engine.mjs
+node bin/strong.mjs review --root . --path src
 npm run check
 npm test
 npm run budget
@@ -211,7 +256,7 @@ npm run budget
 
 测试覆盖中英文技能路由、原生宿主契约模拟、真实 stdio 子进程往返、路径边界、取消与输出上限。本地检查不等于真实 DSH 集成测试或模型能力评测。DSH 契约参考版本、上游链接与待验证项目见[兼容性记录](docs/compatibility.md)。
 
-运行 `npm pack` 可生成本地分发 tarball；打包前会自动执行静态检查和测试。源码无需编译或安装脚本。
+修改 `client/*.mjs` 后运行 `npm run build:ui` 更新已提交的浏览器分发文件；静态检查会拒绝过期 bundle。无需额外构建依赖。运行 `npm pack` 可生成本地分发 tarball，打包前会自动执行静态检查和测试；安装时无需构建。
 
 ## 参与贡献
 

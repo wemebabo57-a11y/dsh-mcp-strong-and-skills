@@ -1,6 +1,5 @@
-import { StrongEngine, TOOLS, boundResult } from './engine.mjs';
+import { StrongEngine, toolsForConfig, buildPolicy, boundResult } from './engine.mjs';
 import { SKILL_CATALOG, loadSkill } from './skills.mjs';
-import { POLICY } from './policy.mjs';
 
 // A small, dependency-free stdio implementation of the negotiated MCP subset.
 // No HTTP listener, sampling, prompts, subscriptions, or arbitrary command tool.
@@ -10,6 +9,7 @@ const MAX_IN_FLIGHT = 16;
 
 export function startMcp({ root, config = {}, input = process.stdin, output = process.stdout }) {
   const engine = new StrongEngine(root, config);
+  const tools = toolsForConfig(engine.config);
   const active = new Map();
   let state = 'new';
   let buffer = Buffer.alloc(0);
@@ -31,16 +31,16 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
       }
       state = 'initializing';
       return { protocolVersion: PROTOCOL_VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'dsh-strong-skills', version: '0.1.0' }, instructions: POLICY };
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'dsh-strong-skills', version: '0.2.0' }, instructions: buildPolicy(engine.config) };
     }
     if (state !== 'ready') throw Object.assign(new Error('Send initialize and notifications/initialized first'), { rpcCode: -32002 });
     if (params !== undefined && (!params || typeof params !== 'object' || Array.isArray(params))) throw Object.assign(new Error('Parameters must be an object'), { rpcCode: -32602 });
     if (method === 'tools/list') {
       if (params?.cursor !== undefined) throw Object.assign(new Error('This static list has no cursor'), { rpcCode: -32602 });
-      return { tools: TOOLS.map(tool => ({ ...tool, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } })) };
+      return { tools: tools.map(tool => ({ ...tool, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } })) };
     }
     if (method === 'tools/call') {
-      if (!params || typeof params.name !== 'string' || !TOOLS.some(tool => tool.name === params.name)) throw Object.assign(new Error('Unknown tool'), { rpcCode: -32602 });
+      if (!params || typeof params.name !== 'string' || !tools.some(tool => tool.name === params.name)) throw Object.assign(new Error('Unknown tool'), { rpcCode: -32602 });
       try {
         const value = await engine.call(params.name, Object.hasOwn(params, 'arguments') ? params.arguments : {}, { signal });
         return { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false };

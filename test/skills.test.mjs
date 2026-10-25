@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StrongEngine, TOOLS, budgetReport } from '../src/engine.mjs';
+import { StrongEngine, TOOLS, BASE_TOOLS, budgetReport, buildPolicy } from '../src/engine.mjs';
 import { loadSkill, selectSkills, SKILL_CATALOG } from '../src/skills.mjs';
 import { resolveConfig } from '../src/config.mjs';
 import { POLICY } from '../src/policy.mjs';
@@ -118,20 +118,25 @@ test('cancelled skill calls never return a successful body', async () => {
   await assert.rejects(loadSkill('debug', control.signal), error => error === reason);
 });
 
-test('resident budget contains two tool schemas and zero complete skill bodies', async () => {
+test('resident budget contains only the selected tool schemas and zero complete skill bodies', async () => {
   const budget = budgetReport();
-  assert.equal(budget.residentTools, 2);
+  assert.equal(budget.residentTools, 4);
   assert.equal(budget.residentTools, TOOLS.length);
   assert.equal(budget.residentSkillBodies, 0);
-  assert.equal(budget.policyChars, POLICY.length);
+  const policy = buildPolicy();
+  assert.equal(budget.policyChars, policy.length);
   assert.equal(budget.toolSchemaChars, JSON.stringify(TOOLS).length);
   assert.ok(budget.toolSchemaChars < 5000, 'Gateway schemas should remain compact');
-  assert.ok(budget.approximateResidentTokens < 1800, 'Resident instructions should not grow into a skill dump');
+  assert.ok(budget.approximateResidentTokens < 1600, 'Resident instructions should not grow into a skill dump');
+  const compact = budgetReport({ toolSet: 'compact', enhancedThinking: false });
+  assert.equal(compact.residentTools, BASE_TOOLS.length);
+  assert.equal(compact.policyChars, POLICY.length);
+  assert.equal(compact.toolSchemaChars, JSON.stringify(BASE_TOOLS).length);
   assert.equal(budget.maxSkillLoads, 2);
   assert.equal(budgetReport({ profile: 'lean' }).maxSkillLoads, 1);
   for (const { id } of SKILL_CATALOG) {
     const { content } = await loadSkill(id);
-    assert.equal(POLICY.includes(content), false);
+    assert.equal(policy.includes(content), false);
     assert.equal(JSON.stringify(TOOLS).includes(content), false);
   }
 });

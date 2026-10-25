@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
   <title id="title">DSH Strong Skills — More capable. Less context.</title>
-  <desc id="desc">A lightweight DeepSeek Harness companion: eight on-demand coding skills, two bounded tool gateways, and a built-in MCP server with zero runtime dependencies.</desc>
+  <desc id="desc">A lightweight DeepSeek Harness companion: universal coding enhancements, dedicated DeepSeek strategies, eight on-demand skills and four bounded tools.</desc>
   <defs>
     <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
       <path d="M32 0H0V32" fill="none" stroke="#242720" stroke-opacity=".045"/>
@@ -19,7 +19,7 @@
     <path d="M56 324H688" stroke="#242720" stroke-opacity=".2"/>
     <g font-family="Consolas, 'Courier New', monospace" font-size="13" font-weight="700" letter-spacing=".7">
       <text x="56" y="363">08 SKILLS</text>
-      <text x="232" y="363">02 GATEWAYS</text>
+      <text x="232" y="363">04 TOOLS</text>
       <text x="439" y="363">00 RUNTIME DEPS</text>
     </g>
     <text x="56" y="403" font-size="12" fill="#777b70" letter-spacing="1.1">ON-DEMAND GUIDANCE. BOUNDED WORKSPACE CONTEXT. BUILT-IN MCP.</text>
@@ -33,7 +33,7 @@
         <text x="67" y="34">Skills</text><text x="67" y="113">Context</text><text x="67" y="193">MCP</text>
       </g>
       <g font-size="13" fill="#686e60">
-        <text x="67" y="55">Load the relevant playbook</text><text x="67" y="134">Read only what matters</text><text x="67" y="214">One server, two gateways</text>
+        <text x="67" y="55">Load the relevant playbook</text><text x="67" y="134">Read only what matters</text><text x="67" y="214">One server, four tools</text>
       </g>
       <g fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="m322 30 7 9-7 9m-11-18-7 9 7 9" stroke="#cb603f"/>
