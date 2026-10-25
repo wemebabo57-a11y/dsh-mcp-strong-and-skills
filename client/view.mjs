@@ -5,6 +5,7 @@ export const SETTINGS_CSS = `
 .strong-settings h3{font:inherit;font-size:14px;font-weight:650;margin:0 0 12px}.strong-settings p{margin:4px 0;line-height:1.6}
 .strong-settings__intro,.strong-settings__hint{color:var(--ss-muted);font-size:13px}.strong-settings__group{margin:24px 0 0;padding:0 0 24px;border-bottom:1px solid var(--ss-line)}
 .strong-settings__row{display:grid;grid-template-columns:minmax(0,1fr) minmax(145px,220px);gap:18px;align-items:center;padding:12px 0}
+.strong-settings__modes .strong-settings__row{grid-template-columns:minmax(0,1fr) auto}
 .strong-settings__row label{display:block;font-size:14px;font-weight:550}.strong-settings__row select,.strong-settings__row input[type=number],.strong-settings textarea{font:inherit;color:inherit;background:transparent;border:1px solid var(--ss-line);border-radius:8px;min-height:38px;padding:8px 10px;width:100%}
 .strong-settings__row option{color:var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-bg-layer-3,Canvas)}.strong-settings input[type=checkbox]{width:36px;height:22px;justify-self:end;accent-color:var(--dsw-alias-state-business-primary,#63764b);cursor:pointer}
 .strong-settings input:focus-visible,.strong-settings select:focus-visible,.strong-settings textarea:focus-visible,.strong-settings button:focus-visible,.strong-settings summary:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#63764b);outline-offset:3px}
@@ -33,6 +34,11 @@ export const EN = Object.freeze({
   pro: 'DeepSeek V4 Pro', flash: 'DeepSeek V4.1 Flash · 1017', generic: 'Universal',
   modelNote: 'Automatic uses specialized guidance for supported DeepSeek models and universal enhancements for all others. Choose the actual model and provider reasoning settings in Settings → Models. The Flash strategy follows the rolling deepseek-flash API model.',
   tools: 'Tool set', toolsHint: 'Expanded adds navigation and inspection tools; compact keeps the core tools.', compact: 'Compact', expanded: 'Expanded',
+  modes: 'Working modes', modesHint: 'Optional guidance; both modes start off and can be combined.',
+  claudeMode: 'Claude mode', claudeModeHint: 'For every model: frontend inspiration from warm neutrals, clear hierarchy, whitespace, and restrained accents; task guidance follows goals, evidence, and verification. Your project’s brand comes first.',
+  weNeedToThinking: 'we need to thinking', weNeedToThinkingHint: 'Only applies when the current model name contains “deepseek” (case insensitive). Guides shared goals → evidence → action → checks, without requiring a phrase or language. Other models skip it.',
+  modesNote: 'These modes provide style and task guidance, without switching models or reproducing Claude’s private reasoning.',
+  modesThinkingOff: 'Enhanced thinking is off. Claude frontend guidance remains active when enabled; planning guidance from both modes is paused. Your mode preferences stay saved.',
   budget: 'Resource budget', profile: 'Profile', profileHint: 'Set the default amount of workspace context and tool output.', lean: 'Lean', thorough: 'Thorough',
   design: 'Design preferences', brand: 'Allow brand colors', brandHint: 'Use brand colors when a project needs them.', intent: 'Brand intent', intentHint: 'Optional design direction, up to 200 characters. Saved when you leave the field.',
   advanced: 'Advanced limits', advancedHint: 'Custom limits override profile defaults. Number edits save when you leave the field.',
@@ -56,6 +62,11 @@ export const ZH = Object.freeze({
   model: '模型策略', modelHint: '所有模型均有通用增强，DeepSeek 可选专用指导；不切换实际模型。', pro: 'DeepSeek V4 Pro', flash: 'DeepSeek V4.1 Flash · 1017', generic: '通用增强',
   modelNote: '「自动」为支持的 DeepSeek 模型应用专用指导，其他模型保留全部通用增强。实际模型及推理参数请在「设置 → 模型」中选择。Flash 策略对应滚动更新的 deepseek-flash API 模型。',
   tools: '工具集', toolsHint: '扩展模式增加导航与检查工具；精简模式保留核心工具。', compact: '精简', expanded: '扩展',
+  modes: '工作模式', modesHint: '按需开启，两种模式默认关闭，可同时使用。',
+  claudeMode: 'Claude 模式', claudeModeHint: '适用于所有模型：前端参考暖中性色、清晰层级、留白与克制的强调色；解题从目标、证据到验证展开。优先尊重项目品牌。',
+  weNeedToThinking: 'we need to 思维', weNeedToThinkingHint: '仅在当前模型名称含 deepseek 时生效，不区分大小写。以共同目标 → 证据 → 行动 → 检查引导，不限定句式或语言；其他模型自动跳过。',
+  modesNote: '模式提供风格与解题方法引导，不切换模型，也不复现 Claude 的内部推理。',
+  modesThinkingOff: '增强思考已关闭：已开启的 Claude 前端指导仍生效，两种模式的规划引导暂停；模式偏好继续保存。',
   budget: '资源预算', profile: '资源档位', profileHint: '设置工作区上下文与工具输出的默认用量。', lean: '轻量', thorough: '详尽',
   design: '设计偏好', brand: '允许品牌色', brandHint: '项目需要时使用品牌色。', intent: '品牌意图', intentHint: '可选的设计方向，最多 200 字；离开输入框时保存。',
   advanced: '高级限制', advancedHint: '自定义限制优先于资源档位的默认值；离开数字输入框时保存。',
@@ -134,6 +145,14 @@ export function createSettingsSection(h) {
         select('modelPreset', 'model', 'modelHint', [['auto', 'auto'], ['deepseek-v4-pro', 'pro'], ['deepseek-v4.1-flash-1017', 'flash'], ['generic', 'generic']]),
         h('p', { className: 'strong-settings__hint' }, t('modelNote')),
         select('toolSet', 'tools', 'toolsHint', [['compact', 'compact'], ['expanded', 'expanded']])),
+      h('div', { className: 'strong-settings__group strong-settings__modes' },
+        h('h3', null, t('modes')),
+        h('p', { className: 'strong-settings__hint' }, t('modesHint')),
+        toggle('claudeMode', 'claudeMode', 'claudeModeHint'),
+        toggle('weNeedToThinking', 'weNeedToThinking', 'weNeedToThinkingHint'),
+        h('p', { className: 'strong-settings__hint' }, t('modesNote')),
+        !value.enhancedThinking && (value.claudeMode || value.weNeedToThinking)
+          ? h('p', { className: 'strong-settings__notice', role: 'status' }, t('modesThinkingOff')) : null),
       h('div', { className: 'strong-settings__group' },
         h('h3', null, t('budget')),
         select('profile', 'profile', 'profileHint', [['lean', 'lean'], ['balanced', 'balanced'], ['thorough', 'thorough']]),

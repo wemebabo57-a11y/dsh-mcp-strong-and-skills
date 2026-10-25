@@ -19,9 +19,11 @@ On-demand skills. Bounded context. Built for DeepSeek Harness.
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的轻量编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略**。内置 8 个按需技能、4 个工具入口、可关闭的增强思考，以及独立的 stdio MCP 服务。
 
+**0.2.2previre 预览版**新增可选的「Claude 模式」与「we need to 思维」，可在独立设置页分别开启。版本展示名保留 `0.2.2previre`，包版本按 SemVer 写作 `0.2.2-previre`。
+
 模型继续使用宿主当前 profile 启用的编辑、终端、联网、浏览器与子代理工具。本插件在本地加载技能、检索文件，不在后台发起模型请求。
 
-> **验证状态：** 自动化测试覆盖独立入口、设置保存、模型策略与工具；已在真实 DSH 0.2.1-rc.3 中验证设置页，以及增强开关关闭、刷新保持与恢复开启。中英文 320–420px 组件预览无溢出。没有发起付费模型请求，尚未进行模型能力基准评测，见[兼容性记录](docs/compatibility.md)。
+> **验证状态：** 108 项自动化测试通过。已在隔离的真实 DSH 0.2.1-rc.3 中验证本版设置页：两个模式开启后刷新保持开启，关闭增强思考时保留偏好并显示暂停提示，再恢复默认并确认刷新保持。当前控件中英文 320–420px 组件预览无溢出。没有发起模型生成或付费模型请求，尚未进行模型能力基准评测，见[兼容性记录](docs/compatibility.md)。
 
 ## 快速开始
 
@@ -97,7 +99,7 @@ dsh --profile web --patch /absolute/path/to/strong.native.patch.yml
 
 ![真实 DSH rc.3 中的 Strong Skills 独立设置页](docs/assets/settings.png)
 
-上图来自隔离的真实 DSH rc.3 测试实例，界面继承宿主主题。测试已验证关闭后刷新仍保持关闭，再恢复开启。
+上图为 0.2.2previre 在隔离的真实 DSH rc.3 测试实例中的设置页，界面继承宿主主题；两个新模式默认关闭。已验证开启、刷新保持、增强思考关闭时暂停与恢复默认。
 
 ### 桌面端没有看到设置入口
 
@@ -116,13 +118,25 @@ github:wemebabo57-a11y/dsh-mcp-strong-and-skills#main
 | 设置 | 默认值 | 效果 |
 | --- | --- | --- |
 | 增强思考 | 开启 | 所有模型获得规划、契约核对、失败边界检查与有依据的验证指导 |
+| Claude 模式 | 关闭 | 所有模型可用；为生成的前端提供简洁、温暖的设计方向，并引导目标、证据与验证驱动的任务处理 |
+| we need to 思维 | 关闭 | 仅当前模型名称含 `deepseek` 或「深度求索」时，追加共同目标、所需证据、最小行动与验证的引导 |
 | 思考等级 | 均衡 | 深度模式增加一次有上限的反例检查，避免无限自审 |
 | 澄清频率 | 多问一些 | 缺少会影响实现的关键信息时，合并询问 1–3 个问题；简单任务继续执行 |
 | 模型策略 | 自动 | 识别官方 DeepSeek 别名使用专用策略；其他模型使用完整通用增强 |
 | 工具集 | 扩展 | 4 个入口；精简模式保留 `strong_skill` 与 `strong_context` |
 | 资源档位 | 均衡 | 控制扫描与输出上限；高级限制可单独覆盖 |
 
-**关闭“增强思考”会移除插件额外的规划、自审、模型专用指导与澄清策略**，基础技能和工具仍可使用。插件的增强开关不改写服务商原生的 thinking / reasoning effort 参数；实际模型与 API 推理强度仍由 DSH 的模型设置决定。
+**关闭“增强思考”会移除插件额外的规划、自审、模型专用指导与澄清策略**，同时暂停 Claude 模式的任务处理指导与 we need to 思维。Claude 模式的前端设计偏好、基础技能和工具仍可使用。插件的增强开关不改写服务商原生的 thinking / reasoning effort 参数；实际模型与 API 推理强度仍由 DSH 的模型设置决定。
+
+### 两个可选模式
+
+**Claude 模式**面向所有模型。做前端任务时，参考清晰的信息层级、充足留白、温暖中性色与克制的强调色，兼顾真实内容、交互状态和可访问性；已有品牌及用户指定风格优先。任务处理方面，先明确目标与限制，再根据证据分解行动、检查结果并简洁汇报。这是公开可观察的工作方式与视觉偏好引导，不切换到 Claude，也不声称复现 Claude 的内部推理。
+
+**we need to 思维**采用简短示例引导共同目标与行动，例如从「我们需要交付什么、还缺什么证据」自然过渡到最小改动与验证。它不规定思考必须以 `we need to` 开头，不禁止 `let me`，也不要求展示思维链。是否有效取决于具体模型与任务，尚无基准结果支持固定的能力提升幅度。
+
+此模式只在开关与增强思考均开启，且**当前步骤捕获的模型名称含 `deepseek`（不区分大小写）或「深度求索」**时生效，例如 `deepseek-v4-pro` 或 `vendor/DeepSeek-R1`。只匹配 provider 名称、手选 DeepSeek 策略或缺少模型名称，都不会触发；切换为其他模型后，下一次组装提示时自动移除。独立 MCP 服务没有 DSH 当前步骤模型信息，因此不会仅凭策略预设启用该引导。
+
+两项设置默认关闭，旧配置升级后保持原有行为。开启时只追加短指导，不预载额外技能正文、不增加工具入口，也不发起后台模型请求。
 
 通用增强对任何模型开放，不以 DeepSeek 为使用条件。Pro 专用策略侧重依赖关系、架构取舍与兼容性；Flash 专用策略侧重符号/诊断定位、小步验证和有依据的失败恢复。专用策略会遵循当前可用工具集，不引用已关闭的工具。
 
@@ -218,7 +232,10 @@ dsh --profile web --patch /absolute/path/to/strong.mcp.patch.yml
 ```sh
 node bin/strong.mjs serve --root /absolute/path/to/project --thinking off --tools compact
 node bin/strong.mjs serve --root /absolute/path/to/project --model deepseek-v4.1-flash-1017 --thinking-level deep
+node bin/strong.mjs serve --root /absolute/path/to/project --claude-mode on
 ```
+
+生成原生配置时也可使用 `--claude-mode on` 与 `--we-need-to on`；后者仍需原生宿主在运行时提供匹配的当前模型名称，`--model` 只选择工作策略。
 
 ## 上下文预算
 
@@ -227,7 +244,10 @@ node bin/strong.mjs serve --root /absolute/path/to/project --model deepseek-v4.1
 ```sh
 node bin/strong.mjs budget
 node bin/strong.mjs budget --thinking off --tools compact
+node bin/strong.mjs budget --claude-mode on --we-need-to on
 ```
+
+新模式默认关闭，不增加上述默认预算。在增强思考开启时，Claude 模式追加约 **173 tokens**；匹配到 DeepSeek 当前模型后，we need to 思维再追加约 **99 tokens**，同时生效合计约 **272 tokens**。这是相对同一模型、同一配置的增量；例如当前模型为 `deepseek-flash` 时，均衡扩展配置由约 1,186 增至 1,458 tokens。CLI `budget` 没有当前模型上下文时会在 `modes.weNeedTo` 中显示未启用原因，不会仅凭预设把它计为生效。
 
 | Profile | 单次结果字符上限 | 最多扫描文件 | 每次最多加载技能 |
 | --- | ---: | ---: | ---: |

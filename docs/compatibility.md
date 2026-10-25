@@ -2,6 +2,16 @@
 
 Initial contract review on 2026-10-24; updated for v0.2 on 2026-10-25 against official upstream source and an isolated real DSH 0.2.1-rc.3 Web instance.
 
+## 0.2.2previre mode boundary
+
+The release display name is `0.2.2previre`; its package version is the SemVer prerelease `0.2.2-previre`. The two optional boolean fields `claudeMode` and `weNeedToThinking` default to false and reuse the existing volatile Config and native settings form. No new tool or runtime dependency is required.
+
+Claude mode applies frontend design preferences across models and adds goal/evidence/action/verification guidance when enhanced thinking is enabled. Disabling enhanced thinking removes its planning guidance while retaining its frontend preference. The mode does not select Claude or claim access to Claude's internal reasoning.
+
+The we need to guidance is active only when its preference and enhanced thinking are enabled and the actual current step's captured model name contains `deepseek`, case-insensitively, or `深度求索`. Provider names and manually selected policy presets do not bypass this gate; missing model context leaves it inactive. Model switching is evaluated on each prompt assembly. This is a guidance example, not a required reasoning prefix, a ban on `let me`, or a request to reveal private reasoning. It makes no measured model-quality claim. Standalone MCP initialization has no current-step model selection and therefore does not activate this guidance based on a policy preset alone.
+
+The current release passes 108 local automated tests, covering mode logic, accepted-value persistence, defaults, model gates, and bundle behavior. In an isolated real DSH 0.2.1-rc.3 Web host, both modes initially defaulted to false with enhanced thinking true. Both were enabled and remained true after reload; disabling enhanced thinking retained both preferences and displayed the paused notice. Enhanced thinking was then restored and both modes disabled, with false/false/true confirmed after reload. Runtime browser errors were empty, requests stayed on localhost, and no model generation or chat message was sent. Current controls were also rendered with real React at 320, 360, and 420px in both languages without horizontal overflow. This establishes settings behavior, not a model-quality or provider-inference benchmark.
+
 ## v0.2 live configuration and client surface
 
 The native entry now exports a Schemastery `Config`. Each editable field is `.volatile()` and the runtime reads its stable reference with `.get()` for every prompt assembly and tool call. The native integration declares `@deepseek-ai/schemastery@~3.18.5` as an optional host peer; CLI/MCP do not import it. Real Schemastery 3.18.5 was used to validate volatile fields, defaults, and conversion to effective runtime settings. Without a Harness host, the entry supplies a Standard Schema fallback for standalone contract tests; that fallback is not a substitute for a live settings form.

@@ -58,3 +58,29 @@ test('invalid CLI usage fails visibly on stderr', () => {
     assert.equal(result.stdout, '');
   }
 });
+
+test('optional mode flags round-trip through native and MCP configuration without coercing values', () => {
+  const modeArgs = ['--claude-mode', 'on', '--we-need-to', 'on'];
+  const native = run(['config', '--mode', 'native', '--root', root, ...modeArgs]);
+  assert.equal(native.status, 0, native.stderr);
+  assert.match(native.stdout, /claudeMode: true/);
+  assert.match(native.stdout, /weNeedToThinking: true/);
+  const mcp = run(['config', '--mode', 'mcp', '--root', root, ...modeArgs]);
+  assert.equal(mcp.status, 0, mcp.stderr);
+  const args = JSON.parse(mcp.stdout.match(/args: (.+)/)[1]);
+  assert.deepEqual(args.slice(-4), modeArgs);
+  // The generated server invocation must accept the same flags.
+  const budget = run(['budget', ...modeArgs]);
+  assert.equal(budget.status, 0, budget.stderr);
+  assert.ok(JSON.parse(budget.stdout));
+  const off = run(['config', '--mode', 'native', '--root', root, '--claude-mode', 'off', '--we-need-to', 'off']);
+  assert.equal(off.status, 0, off.stderr);
+  assert.match(off.stdout, /claudeMode: false/);
+  assert.match(off.stdout, /weNeedToThinking: false/);
+  for (const flag of ['--claude-mode', '--we-need-to']) {
+    const invalid = run(['budget', flag, 'true']);
+    assert.equal(invalid.status, 1);
+    assert.equal(invalid.stdout, '');
+    assert.match(invalid.stderr, /must be on or off/);
+  }
+});

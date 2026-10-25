@@ -7,6 +7,8 @@ export function createConfigSchema(z) {
   return z.object({
     profile: choices(['lean', 'balanced', 'thorough'], 'balanced', '上下文预算档位'),
     enhancedThinking: z.boolean().default(true).description('增强思考：方案、边界检查与必要澄清').volatile(),
+    claudeMode: z.boolean().default(false).description('Claude 模式：前端视觉参考与结构化解题；思考部分受增强思考总开关控制').volatile(),
+    weNeedToThinking: z.boolean().default(false).description('we need to 思维：仅名称含 DeepSeek 或深度求索的当前模型启用协作目标引导').volatile(),
     thinkingLevel: choices(['balanced', 'deep'], 'balanced', '增强程度；不改写模型 API reasoning effort'),
     clarification: choices(['auto', 'more', 'few'], 'more', '关键信息不明时的澄清偏好'),
     modelPreset: choices(['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'], 'auto', '模型指导预设；不切换实际模型'),

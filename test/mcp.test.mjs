@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
+import packageInfo from '../package.json' with { type: 'json' };
 
 const executable = fileURLToPath(new URL('../bin/strong.mjs', import.meta.url));
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -55,6 +56,7 @@ test('stdio initialize, tool discovery, on-demand skills, resources and bounded 
   const c = client(t, 'lean');
   const init = await initialize(c);
   assert.deepEqual(init.capabilities, { tools: {}, resources: {} });
+  assert.deepEqual(init.serverInfo, { name: packageInfo.name, version: packageInfo.version });
   assert.ok(init.instructions.length < 1000);
   const listed = await c.request(2, 'tools/list', {});
   assert.equal(listed.result.tools.length, 4);
@@ -82,6 +84,16 @@ test('MCP compact/off removes optional tools and enhancement policy', async t =>
   assert.deepEqual(listed.result.tools.map(tool => tool.name), ['strong_skill', 'strong_context']);
   assert.equal(init.instructions.includes('增强编码'), false);
   assert.equal((await c.request(3, 'tools/call', { name: 'strong_code', arguments: { action: 'symbols' } })).error.code, -32602);
+});
+
+test('MCP mode flags enable Claude guidance but cannot infer a current model from a strategy preset', async t => {
+  const c = client(t, 'lean', ['--claude-mode', 'on', '--we-need-to', 'on', '--model', 'deepseek-v4-pro']);
+  const init = await initialize(c);
+  assert.match(init.instructions, /Claude 风格界面参考/);
+  assert.match(init.instructions, /Claude 风格工作法/);
+  assert.doesNotMatch(init.instructions, /协作目标引导/);
+  const listed = await c.request(2, 'tools/list');
+  assert.equal(listed.result.tools.length, 4);
 });
 
 test('MCP expanded coding tools return real bounded symbols and parsed diagnostics', async t => {

@@ -4,6 +4,7 @@ import { selectSkills } from './skills.mjs';
 import { POLICY, estimateTokens } from './policy.mjs';
 import { buildEnhancementPolicy } from './thinking.mjs';
 import { getModelProfile } from './models.mjs';
+import { buildDesignModePolicy, getModeState } from './modes.mjs';
 import { EXTRA_TOOLS, runCodeTool } from './code-tools.mjs';
 
 export const BASE_TOOLS = Object.freeze([
@@ -33,7 +34,7 @@ export function toolsForConfig(options = {}) {
 export function buildPolicy(options = {}, context = {}) {
   const config = resolveConfig(options);
   const enhancement = buildEnhancementPolicy(config, context);
-  return [POLICY, config.toolSet === 'expanded' ? '复杂代码定位可用 strong_code 提取符号、导入与诊断；修改后可用 strong_review 提取差异风险与验证建议。它们提供线索，仍需实际验证。' : '', enhancement].filter(Boolean).join('\n');
+  return [POLICY, config.toolSet === 'expanded' ? '复杂代码定位可用 strong_code 提取符号、导入与诊断；修改后可用 strong_review 提取差异风险与验证建议。它们提供线索，仍需实际验证。' : '', buildDesignModePolicy(config), enhancement].filter(Boolean).join('\n');
 }
 
 export function validateArguments(schema, args) {
@@ -104,6 +105,7 @@ export function budgetReport(options = {}, context = {}) {
   const policy = buildPolicy(config, context);
   return { profile: config.profile, toolSet: config.toolSet, residentTools: toolsForConfig(config).length, residentSkillBodies: 0,
     enhancedThinking: config.enhancedThinking, thinkingLevel: config.thinkingLevel, clarification: config.clarification,
+    modes: getModeState(config, context),
     modelProfile: getModelProfile(context.selection ?? context.modelId, config), nativeReasoning: 'host-controlled',
     policyChars: policy.length, toolSchemaChars: toolText.length,
     approximateResidentTokens: estimateTokens(policy) + estimateTokens(toolText),

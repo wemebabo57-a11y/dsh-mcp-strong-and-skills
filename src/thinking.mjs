@@ -1,4 +1,5 @@
 import { getModelProfile } from './models.mjs';
+import { buildThinkingModePolicy } from './modes.mjs';
 
 const CORE = '通用增强编码（所有模型）：简单任务直接实施；复杂任务先在内部确认目标、约束、依赖和验收，再给出至多3步简要计划。选择最小完整改动，先核对调用方与契约；完成后一次自审正确性、边界、失败路径和回归风险，用适当检查验证。检查通过即交付，证据不足才继续；汇报结果、验证和剩余限制，不展示内部推理。';
 
@@ -38,5 +39,5 @@ export function buildEnhancementPolicy(config = {}, { modelId, selection } = {})
   const toolSet = config.toolSet ?? 'expanded';
   if (!['compact', 'expanded'].includes(toolSet)) throw new Error('Invalid toolSet');
   const modelPolicy = MODEL_POLICY[profile.family] + (MODEL_TOOLS[profile.family]?.[toolSet] ?? '');
-  return [CORE, CLARIFICATION[clarification], modelPolicy, level === 'deep' ? DEEP : ''].filter(Boolean).join('\n');
+  return [CORE, CLARIFICATION[clarification], modelPolicy, level === 'deep' ? DEEP : '', buildThinkingModePolicy(config, { modelId, selection })].filter(Boolean).join('\n');
 }

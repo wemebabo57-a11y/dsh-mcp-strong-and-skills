@@ -30,12 +30,17 @@ const API_PROFILES = new Map([
   ['deepseek-v4-flash-vision-exp', 'deepseek-v4.1-flash-1017'],
 ]);
 
+/** Model identity comes only from the actual selection, never a provider or policy preset. */
+export function getSelectedModel(selection) {
+  const value = typeof selection === 'string' ? selection : selection?.model;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 /** Return descriptive policy metadata without mutating the host's selection. */
 export function getModelProfile(selection, config = {}) {
   const preset = config.modelPreset ?? 'auto';
   if (!MODEL_PRESETS.includes(preset)) throw new Error('Invalid modelPreset');
-  const value = typeof selection === 'string' ? selection : selection?.model;
-  const selectedModel = typeof value === 'string' && value.trim() ? value.trim() : null;
+  const selectedModel = getSelectedModel(selection);
   const detected = selectedModel ? API_PROFILES.get(selectedModel.toLowerCase()) : undefined;
   const id = preset === 'auto' ? detected ?? 'generic' : preset;
   return Object.freeze({

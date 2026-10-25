@@ -88,12 +88,37 @@ test('host refusal/reconnect updates and transport errors preserve accepted sett
 test('invalid UI values never reach the Host and reset clears overrides atomically', async () => {
   const f = fixture();
   const controller = createSettingsController(f.form);
-  for (const [field, value] of [['thinkingLevel', 'extreme'], ['enhancedThinking', 'false'], ['brandIntent', 'x'.repeat(201)], ['maxSkillLoads', 3], ['maxFiles', 1.5]]) {
+  for (const [field, value] of [['thinkingLevel', 'extreme'], ['enhancedThinking', 'false'], ['claudeMode', 'true'], ['weNeedToThinking', 1], ['brandIntent', 'x'.repeat(201)], ['maxSkillLoads', 3], ['maxFiles', 1.5]]) {
     assert.equal(await controller.set(field, value), false);
   }
   assert.equal(f.writes.length, 0);
   assert.equal(await controller.reset(), true);
   assert.deepEqual(f.writes[0], { ops: SETTINGS_FIELDS.map(field => ({ op: 'unset', path: [field] })) });
+  controller.dispose();
+});
+
+test('older Host profiles show both modes off without writing defaults and mode reset clears overrides', async () => {
+  const previous = { ...defaults() };
+  delete previous.claudeMode;
+  delete previous.weNeedToThinking;
+  const f = fixture({ status: 'ready', writable: true, value: previous });
+  const controller = createSettingsController(f.form);
+  assert.equal(controller.store.getSnapshot().value.claudeMode, false);
+  assert.equal(controller.store.getSnapshot().value.weNeedToThinking, false);
+  assert.deepEqual(f.writes, []);
+  for (const field of ['claudeMode', 'weNeedToThinking']) {
+    assert.equal(await controller.set(field, true), true);
+    assert.equal(controller.store.getSnapshot().value[field], true);
+  }
+  f.form.set = async () => false;
+  assert.equal(await controller.set('weNeedToThinking', false), false);
+  assert.equal(controller.store.getSnapshot().value.weNeedToThinking, true);
+  assert.equal(await controller.reset(), true);
+  assert.equal(controller.store.getSnapshot().value.claudeMode, false);
+  assert.equal(controller.store.getSnapshot().value.weNeedToThinking, false);
+  const resets = f.writes.at(-1).ops.map(operation => operation.path[0]);
+  assert.ok(resets.includes('claudeMode'));
+  assert.ok(resets.includes('weNeedToThinking'));
   controller.dispose();
 });
 
@@ -173,10 +198,10 @@ function pluginFixture(form, plugin = createClientPlugin({ createElement: h })) 
   plugin.apply(ctx);
   return {
     registrations,
-    render(name = 'settings.section') {
+    render(name = 'settings.section', dictionary = EN) {
       const { options, component } = registrations.get(name);
       const face = options.inject();
-      return component({ ...face, useStrongSettings: selector => selector(face.hooks.strongSettings.getSnapshot()), t: key => EN[key] ?? key });
+      return component({ ...face, useStrongSettings: selector => selector(face.hooks.strongSettings.getSnapshot()), t: key => dictionary[key] ?? key });
     },
     dispose() { for (const dispose of effects.reverse()) dispose(); },
   };
@@ -291,6 +316,46 @@ test('number and text blur edits restore saved values on refusal and read-only f
   ui.dispose();
 });
 
+test('both native surfaces expose bilingual mode switches, persist choices, and explain enhanced-off behavior', async () => {
+  const f = fixture();
+  const ui = pluginFixture(f.form);
+  for (const dictionary of [EN, ZH]) {
+    for (const surface of ['settings.section', 'plugins.bundle.config']) {
+      const tree = ui.render(surface, dictionary);
+      assert.ok(content(tree).includes(dictionary.modes));
+      for (const field of ['claudeMode', 'weNeedToThinking']) {
+        const input = control(tree, field);
+        const nodes = descendants(tree);
+        const label = nodes.find(node => node.type === 'label' && node.props.htmlFor === input.props.id);
+        const hint = nodes.find(node => node.props.id === input.props['aria-describedby']);
+        assert.equal(content(label), dictionary[field]);
+        assert.equal(content(hint), dictionary[`${field}Hint`]);
+        assert.equal(input.props.role, 'switch');
+        assert.equal(input.props.checked, false);
+      }
+    }
+  }
+  for (const field of ['claudeMode', 'weNeedToThinking']) {
+    control(ui.render(), field).props.onChange({ currentTarget: { checked: true } });
+    await tick();
+    assert.equal(f.form.getSnapshot().value[field], true);
+  }
+  control(ui.render(), 'enhancedThinking').props.onChange({ currentTarget: { checked: false } });
+  await tick();
+  for (const dictionary of [EN, ZH]) {
+    const tree = ui.render('settings.section', dictionary);
+    assert.ok(content(tree).includes(dictionary.modesThinkingOff));
+    for (const field of ['claudeMode', 'weNeedToThinking']) {
+      assert.equal(control(tree, field).props.checked, true);
+      assert.equal(control(tree, field).props.disabled, false, 'preferences remain editable while planning is paused');
+    }
+  }
+  ui.dispose();
+  const reopened = pluginFixture(f.form);
+  for (const field of ['claudeMode', 'weNeedToThinking']) assert.equal(control(reopened.render(), field).props.checked, true);
+  reopened.dispose();
+});
+
 test('English and Chinese copy have the same keys', () => {
   assert.deepEqual(Object.keys(EN).sort(), Object.keys(ZH).sort());
   assert.equal(ZH.title, 'Strong Skills 编程增强');
@@ -312,6 +377,11 @@ test('packaged bundle is fresh, registers lazily, and runs the same client surfa
   assert.ok(content(ui.render()).includes(EN.unavailable));
   f.form.publish({ status: 'ready', writable: true, value: defaults() });
   assert.ok(control(ui.render('plugins.bundle.config'), 'enhancedThinking'));
+  for (const field of ['claudeMode', 'weNeedToThinking']) {
+    control(ui.render('plugins.bundle.config'), field).props.onChange({ currentTarget: { checked: true } });
+    await tick();
+    assert.equal(control(ui.render(), field).props.checked, true);
+  }
   ui.dispose();
   assert.equal(f.listeners.size, 0);
 });

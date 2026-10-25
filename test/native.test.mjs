@@ -105,6 +105,30 @@ test('native auto policy uses each captured step model without mutating request 
   assert.deepEqual(flash, { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' });
 });
 
+test('native live modes follow saved switches and each current step model without stale additions', () => {
+  const state = { claudeMode: false, weNeedToThinking: false, enhancedThinking: true };
+  const options = Object.fromEntries(Object.keys(state).map(key => [key, { get: () => state[key] }]));
+  const { ctx, sections } = host();
+  apply(ctx, options);
+  const render = sections[0].text;
+  const first = Object.freeze({ model: 'gateway/DeepSeek-R1', reasoningEffort: 'low' });
+  const other = Object.freeze({ provider: 'deepseek', model: 'different-model', reasoningEffort: 'max' });
+  assert.equal(render({ modelSelection: first }), buildPolicy({}, { selection: first }));
+  state.claudeMode = true;
+  state.weNeedToThinking = true;
+  assert.equal(render({ modelSelection: first }), buildPolicy(state, { selection: first }));
+  assert.equal(render({ modelSelection: other }), buildPolicy(state, { selection: other }));
+  assert.notEqual(render({ modelSelection: first }), render({ modelSelection: other }));
+  state.enhancedThinking = false;
+  assert.equal(render({ modelSelection: first }), buildPolicy({ enhancedThinking: false, claudeMode: true }));
+  state.claudeMode = false;
+  state.weNeedToThinking = false;
+  assert.equal(render({ modelSelection: first }), buildPolicy({ enhancedThinking: false }));
+  assert.equal(sections.length, 1);
+  assert.deepEqual(first, { model: 'gateway/DeepSeek-R1', reasoningEffort: 'low' });
+  assert.deepEqual(other, { provider: 'deepseek', model: 'different-model', reasoningEffort: 'max' });
+});
+
 test('live compact tools disappear from discovery and reject execution until expanded again', async t => {
   const root = await temporaryWorkspace(t, 'dynamic tools');
   await fs.writeFile(path.join(root, 'sample.mjs'), 'export function sample(value) { return value; }\n', 'utf8');
@@ -134,11 +158,13 @@ test('native Standard Schema validates defaults and rejects invalid settings', a
   assert.equal(defaults.issues, undefined);
   const config = snapshotConfig(defaults.value);
   assert.equal(config.enhancedThinking, true);
+  assert.equal(config.claudeMode, false);
+  assert.equal(config.weNeedToThinking, false);
   assert.equal(config.thinkingLevel, 'balanced');
   assert.equal(config.clarification, 'more');
   assert.equal(config.modelPreset, 'auto');
   assert.equal(config.toolSet, 'expanded');
-  for (const invalid of [{ enhancedThinking: 'false' }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { maxFiles: 1 }]) {
+  for (const invalid of [{ enhancedThinking: 'false' }, { claudeMode: 'true' }, { weNeedToThinking: 1 }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { maxFiles: 1 }]) {
     const result = await standard.validate(invalid);
     assert.ok(result.issues?.length, JSON.stringify(invalid));
   }

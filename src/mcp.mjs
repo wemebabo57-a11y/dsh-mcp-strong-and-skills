@@ -1,5 +1,6 @@
 import { StrongEngine, toolsForConfig, buildPolicy, boundResult } from './engine.mjs';
 import { SKILL_CATALOG, loadSkill } from './skills.mjs';
+import packageInfo from '../package.json' with { type: 'json' };
 
 // A small, dependency-free stdio implementation of the negotiated MCP subset.
 // No HTTP listener, sampling, prompts, subscriptions, or arbitrary command tool.
@@ -31,7 +32,7 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
       }
       state = 'initializing';
       return { protocolVersion: PROTOCOL_VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'dsh-strong-skills', version: '0.2.1' }, instructions: buildPolicy(engine.config) };
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: packageInfo.name, version: packageInfo.version }, instructions: buildPolicy(engine.config) };
     }
     if (state !== 'ready') throw Object.assign(new Error('Send initialize and notifications/initialized first'), { rpcCode: -32002 });
     if (params !== undefined && (!params || typeof params !== 'object' || Array.isArray(params))) throw Object.assign(new Error('Parameters must be an object'), { rpcCode: -32602 });
