@@ -19,6 +19,11 @@ export const EN = Object.freeze({
   title: 'Strong Skills', intro: 'Every model gets stronger planning, verification, and clarification. DeepSeek strategies add specialized guidance.',
   persistence: 'Changes save to this Harness profile and apply to the next request.',
   loading: 'Loading saved preferences…', unavailable: 'Strong Skills settings are unavailable in this profile.',
+  availabilityTitle: 'Check the Harness connection',
+  availabilityHint: 'The Strong Skills browser interface is loaded. Its settings become editable when the Host exposes the strong-skills settings namespace.',
+  availabilityProfile: 'Confirm that dsh-strong-skills is installed and enabled in the Harness profile serving this page. Another profile or Host can have different plugins.',
+  availabilityVersion: 'Use a compatible Harness version (0.2.1-rc.3 or newer, below 0.3.0), then restart Harness and reload this page after installing or updating the plugin.',
+  availabilityLogs: 'If the settings still do not load, check the Host plugin logs for a failed startup or rejected settings schema. This page will update automatically when the Host serves the settings.',
   readonly: 'This profile is read only. Saved preferences are shown below.',
   enhanced: 'Enhanced thinking', enhancedHint: 'Plan before acting, inspect uncertainty, and verify important results.',
   off: 'Enhanced thinking is off. Enable it to use the thinking and clarification preferences below.',
@@ -37,9 +42,14 @@ export const EN = Object.freeze({
 });
 
 export const ZH = Object.freeze({
-  title: 'Strong Skills', intro: '所有模型均可增强规划、验证与需求澄清；DeepSeek 策略额外提供专用指导。',
+  title: 'Strong Skills 编程增强', intro: '所有模型均可增强规划、验证与需求澄清；DeepSeek 策略额外提供专用指导。',
   persistence: '更改会保存到当前 Harness 配置，并在下一次请求时生效。',
   loading: '正在加载已保存的设置…', unavailable: '当前配置中没有可用的 Strong Skills 设置。', readonly: '当前配置为只读，以下为已保存的设置。',
+  availabilityTitle: '检查 Harness 连接',
+  availabilityHint: 'Strong Skills 浏览器界面已加载。Host 提供 strong-skills 设置命名空间后，即可编辑设置。',
+  availabilityProfile: '请确认 dsh-strong-skills 已安装，并在当前页面所连接的 Harness 配置中启用。不同配置或 Host 的插件可能不同。',
+  availabilityVersion: '请使用兼容的 Harness 版本（0.2.1-rc.3 及以上、低于 0.3.0）。安装或更新插件后，重启 Harness 并重新加载此页面。',
+  availabilityLogs: '如果设置仍未加载，请检查 Host 插件日志中的启动失败或设置结构被拒绝信息。Host 提供设置后，此页面会自动更新。',
   enhanced: '增强思考', enhancedHint: '执行前规划，识别不确定性，并验证重要结果。', off: '增强思考已关闭。开启后可使用下方的思考与澄清偏好。',
   thinking: '思考等级', thinkingHint: '调整 Strong Skills 的规划与验证深度。', balanced: '均衡', deep: '深度',
   clarification: '澄清频率', clarificationHint: '遇到会影响结果的不确定性时，选择主动询问的频率。', auto: '自动', more: '多问一些', few: '少问一些',
@@ -65,7 +75,14 @@ export function createSettingsSection(h) {
     if (state.status !== 'ready' || state.value === undefined) {
       return h('section', { className: 'strong-settings', 'aria-labelledby': headingId },
         h('h2', { id: headingId }, t('title')),
-        h('p', { role: 'status' }, t(state.status === 'loading' ? 'loading' : 'unavailable')));
+        h('p', { className: 'strong-settings__intro' }, t('intro')),
+        h('p', { role: 'status', 'aria-live': 'polite' }, t(state.status === 'loading' ? 'loading' : 'unavailable')),
+        h('div', { className: 'strong-settings__group' },
+          h('h3', null, t('availabilityTitle')),
+          h('p', { className: 'strong-settings__hint' }, t('availabilityHint')),
+          h('p', { className: 'strong-settings__hint' }, t('availabilityProfile')),
+          h('p', { className: 'strong-settings__hint' }, t('availabilityVersion')),
+          h('p', { className: 'strong-settings__hint' }, t('availabilityLogs'))));
     }
     const value = state.value;
     const disabled = !state.writable || state.saving;

@@ -30,19 +30,17 @@ export function createClientPlugin(React) {
         set: controller.set,
         reset: controller.reset,
       });
-      ctx.effect(() => ctx.configForms.whileServed([SETTINGS_ENTRY], () => {
-        const registrations = [
-          ctx.slots.inject('settings.section', () => ctx.slots.register({
-            name: 'settings.section', id: SETTINGS_ENTRY, order: 35, label: () => t('title'),
-            locale: localeNamespace, inject: () => face('strong-skills-settings'),
-          }, StrongSettings)),
-          ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
-            name: 'plugins.bundle.config', key: SETTINGS_PACKAGE,
-            locale: localeNamespace, inject: () => face('strong-skills-plugin'),
-          }, StrongSettings)),
-        ];
-        return () => { for (const dispose of registrations.reverse()) dispose(); };
-      }), 'strong-skills: settings surfaces');
+      // Keep the plugin's own page discoverable before its Host namespace is
+      // served, and when it disappears. The form store drives availability;
+      // gating the registrations with whileServed would hide the diagnosis.
+      ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section', id: SETTINGS_ENTRY, order: 35, label: () => t('title'),
+        locale: localeNamespace, inject: () => face('strong-skills-settings'),
+      }, StrongSettings)), 'strong-skills: dedicated settings section');
+      ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+        name: 'plugins.bundle.config', key: SETTINGS_PACKAGE,
+        locale: localeNamespace, inject: () => face('strong-skills-plugin'),
+      }, StrongSettings)), 'strong-skills: plugin settings surface');
     },
   };
 }

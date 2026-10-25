@@ -141,12 +141,14 @@ function descendants(tree) {
 function control(tree, suffix) {
   return descendants(tree).find(node => node.props.id?.endsWith(`-${suffix}`));
 }
+function content(tree) {
+  if (typeof tree === 'string') return tree;
+  return tree?.children?.map(content).join(' ') ?? '';
+}
 
 function pluginFixture(form, plugin = createClientPlugin({ createElement: h })) {
   const effects = [];
   const registrations = new Map();
-  let serve;
-  let remove;
   const ctx = {
     effect(start) { const dispose = start(); if (typeof dispose === 'function') effects.push(dispose); },
     locale: {
@@ -159,11 +161,6 @@ function pluginFixture(form, plugin = createClientPlugin({ createElement: h })) 
     },
     configForms: {
       get(entryId) { assert.equal(entryId, 'strong-skills'); return form; },
-      whileServed(entries, register) {
-        assert.deepEqual([...entries], ['strong-skills']);
-        serve = () => { remove = register(new Set(entries)); };
-        return () => { remove?.(); };
-      },
     },
     slots: {
       inject(_slot, register) { return register(); },
@@ -175,7 +172,7 @@ function pluginFixture(form, plugin = createClientPlugin({ createElement: h })) 
   };
   plugin.apply(ctx);
   return {
-    registrations, serve: () => serve(),
+    registrations,
     render(name = 'settings.section') {
       const { options, component } = registrations.get(name);
       const face = options.inject();
@@ -185,11 +182,60 @@ function pluginFixture(form, plugin = createClientPlugin({ createElement: h })) 
   };
 }
 
-test('actual plugin registers dedicated Settings and bundle slots only while Host settings are served', () => {
+test('actual plugin keeps dedicated Settings and bundle slots visible through Host namespace availability changes', async () => {
+  const f = fixture({ status: 'unavailable', writable: false, value: undefined });
+  const ui = pluginFixture(f.form);
+  const settings = ui.registrations.get('settings.section');
+  const bundle = ui.registrations.get('plugins.bundle.config');
+  assert.equal(ui.registrations.size, 2);
+  assert.equal(f.listeners.size, 1);
+  const face = settings.options.inject();
+  let notices = 0;
+  face.hooks.strongSettings.subscribe(() => { notices += 1; });
+  for (const surface of ['settings.section', 'plugins.bundle.config']) {
+    const tree = ui.render(surface);
+    assert.ok(content(tree).includes(EN.unavailable));
+    for (const key of ['availabilityHint', 'availabilityProfile', 'availabilityVersion', 'availabilityLogs']) {
+      assert.ok(content(tree).includes(EN[key]), `missing ${key}`);
+    }
+    assert.equal(control(tree, 'enhancedThinking'), undefined);
+  }
+  assert.equal(await face.set('enhancedThinking', false), false);
+  assert.equal(await face.reset(), false);
+  assert.deepEqual(f.writes, []);
+
+  f.form.publish({ status: 'loading' });
+  assert.ok(content(ui.render()).includes(EN.loading));
+  assert.equal(await face.set('enhancedThinking', false), false);
+  f.form.publish({ status: 'ready', writable: true, value: defaults() });
+  assert.equal(ui.registrations.get('settings.section'), settings);
+  assert.equal(ui.registrations.get('plugins.bundle.config'), bundle);
+  assert.equal(control(ui.render(), 'enhancedThinking').props.disabled, false);
+  assert.equal(await face.set('enhancedThinking', false), true);
+  assert.equal(control(ui.render(), 'enhancedThinking').props.checked, false);
+  assert.deepEqual(f.writes, [{ field: 'enhancedThinking', value: false }]);
+
+  // ConfigForms can retain an accepted value when its namespace disappears.
+  f.form.publish({ status: 'unavailable', writable: false });
+  assert.equal(ui.registrations.size, 2);
+  assert.ok(content(ui.render()).includes(EN.unavailable));
+  assert.equal(control(ui.render(), 'enhancedThinking'), undefined);
+  assert.equal(face.hooks.strongSettings.getSnapshot().writable, false);
+  assert.equal(await face.set('enhancedThinking', true), false);
+  assert.equal(await face.reset(), false);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.listeners.size, 1);
+  ui.dispose();
+  assert.equal(ui.registrations.size, 0);
+  assert.equal(f.listeners.size, 0);
+  const before = notices;
+  f.form.publish({ status: 'ready', writable: true, value: defaults() });
+  assert.equal(notices, before);
+});
+
+test('actual plugin registers dedicated Settings and bundle slots without waiting for the Host namespace', () => {
   const f = fixture();
   const ui = pluginFixture(f.form);
-  assert.equal(ui.registrations.size, 0);
-  ui.serve();
   const settings = ui.registrations.get('settings.section');
   const bundle = ui.registrations.get('plugins.bundle.config');
   assert.equal(settings.options.id, 'strong-skills');
@@ -206,7 +252,6 @@ test('actual plugin registers dedicated Settings and bundle slots only while Hos
 test('enhanced thinking and model controls persist through the injected Host form, with dependent controls disabled', async () => {
   const f = fixture();
   const ui = pluginFixture(f.form);
-  ui.serve();
   let tree = ui.render();
   control(tree, 'enhancedThinking').props.onChange({ currentTarget: { checked: false } });
   await tick();
@@ -224,7 +269,6 @@ test('enhanced thinking and model controls persist through the injected Host for
   ui.dispose();
   // A fresh page reads the persisted Host state, with no browser storage involved.
   const reopened = pluginFixture(f.form);
-  reopened.serve();
   assert.equal(control(reopened.render(), 'enhancedThinking').props.checked, false);
   reopened.dispose();
 });
@@ -232,7 +276,6 @@ test('enhanced thinking and model controls persist through the injected Host for
 test('number and text blur edits restore saved values on refusal and read-only form disables every control', async () => {
   const f = fixture();
   const ui = pluginFixture(f.form);
-  ui.serve();
   f.form.set = async () => false;
   const number = { value: '100', checkValidity: () => true, reportValidity() {} };
   control(ui.render(), 'maxFiles').props.onBlur({ currentTarget: number });
@@ -250,6 +293,7 @@ test('number and text blur edits restore saved values on refusal and read-only f
 
 test('English and Chinese copy have the same keys', () => {
   assert.deepEqual(Object.keys(EN).sort(), Object.keys(ZH).sort());
+  assert.equal(ZH.title, 'Strong Skills 编程增强');
 });
 
 test('packaged bundle is fresh, registers lazily, and runs the same client surfaces', async () => {
@@ -262,9 +306,12 @@ test('packaged bundle is fresh, registers lazily, and runs the same client surfa
   assert.equal(requested.length, 0);
   const plugin = entry.factory(name => { requested.push(name); assert.equal(name, 'react'); return { createElement: h }; });
   assert.deepEqual(requested, ['react']);
-  const f = fixture();
+  const f = fixture({ status: 'unavailable', writable: false, value: undefined });
   const ui = pluginFixture(f.form, plugin);
-  ui.serve();
+  assert.equal(ui.registrations.size, 2);
+  assert.ok(content(ui.render()).includes(EN.unavailable));
+  f.form.publish({ status: 'ready', writable: true, value: defaults() });
   assert.ok(control(ui.render('plugins.bundle.config'), 'enhancedThinking'));
   ui.dispose();
+  assert.equal(f.listeners.size, 0);
 });

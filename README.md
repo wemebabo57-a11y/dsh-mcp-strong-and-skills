@@ -21,7 +21,7 @@ On-demand skills. Bounded context. Built for DeepSeek Harness.
 
 模型继续使用宿主当前 profile 启用的编辑、终端、联网、浏览器与子代理工具。本插件在本地加载技能、检索文件，不在后台发起模型请求。
 
-> **验证状态：** 95 项自动化测试通过；已在真实 DSH 0.2.1-rc.3 中验证独立设置页，以及增强开关关闭、刷新保持与恢复开启。中英文 320–420px 组件预览无溢出。没有发起付费模型请求，尚未进行模型能力基准评测，见[兼容性记录](docs/compatibility.md)。
+> **验证状态：** 自动化测试覆盖独立入口、设置保存、模型策略与工具；已在真实 DSH 0.2.1-rc.3 中验证设置页，以及增强开关关闭、刷新保持与恢复开启。中英文 320–420px 组件预览无溢出。没有发起付费模型请求，尚未进行模型能力基准评测，见[兼容性记录](docs/compatibility.md)。
 
 ## 快速开始
 
@@ -91,11 +91,27 @@ dsh --profile web --patch /absolute/path/to/strong.native.patch.yml
 
 ## 插件设置与增强思考
 
-原生插件启用后，打开 **设置 → Strong Skills**。也可从 **插件 → dsh-strong-skills** 查看同一配置面板。更改通过 DSH 的 ConfigForms 保存至当前 profile，并在下一次请求/工具调用时读取；不使用浏览器本地存储代替宿主设置。表单保留只读、保存中、写入被拒绝和连接失败状态。
+原生插件启用后，打开 **设置 → Strong Skills 编程增强**（英文界面显示 Strong Skills）。也可从 **插件 → dsh-strong-skills** 查看同一配置面板。更改通过 DSH 的 ConfigForms 保存至当前 profile，并在下一次请求/工具调用时读取；不使用浏览器本地存储代替宿主设置。表单保留只读、保存中、写入被拒绝和连接失败状态。
+
+**v0.2.1 修复了入口被隐藏的问题：** 浏览器客户端加载后，独立设置入口立即注册；不再等待宿主设置表单才显示。表单暂不可用时，页面显示检查提示，恢复后自动显示控件。整个原生插件未安装、被停用或客户端加载失败时，仍需先恢复插件加载。
 
 ![真实 DSH rc.3 中的 Strong Skills 独立设置页](docs/assets/settings.png)
 
 上图来自隔离的真实 DSH rc.3 测试实例，界面继承宿主主题。测试已验证关闭后刷新仍保持关闭，再恢复开启。
+
+### 桌面端没有看到设置入口
+
+桌面应用通常使用 **desktop profile**，终端示例中的 **web profile** 是另一个配置。安装到 web 不会替桌面应用安装插件。请在桌面侧栏的「插件」页面，确认 `dsh-strong-skills` 已安装并启用，然后通过「添加插件」重新安装当前来源，以更新到 v0.2.1 或之后版本：
+
+```text
+github:wemebabo57-a11y/dsh-mcp-strong-and-skills#main
+```
+
+安装完成后，完全退出并重新打开桌面应用，再打开「设置」，查找「Strong Skills 编程增强」。Desktop profile 由 Electron 应用管理，请从桌面端安装/更新，不要把 web profile 的 CLI 命令当作桌面安装命令。仅通过外部 MCP 客户端接入时，使用的是独立服务，不会给 DSH 桌面程序安装原生设置页。
+
+### GitHub 显示旧 CI 失败
+
+`b45707c` 的历史 CI #5 因 Windows LF/CRLF 换行比较失败；`f771abf` 已修复。GitHub 保留旧运行记录和旧通知，重新运行旧提交仍会检查旧代码。请查看 [main 的最新 CI](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml?query=branch%3Amain)，而不是以历史通知判断当前版本。
 
 | 设置 | 默认值 | 效果 |
 | --- | --- | --- |
