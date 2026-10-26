@@ -21,13 +21,17 @@ const PROFILES = Object.freeze({
   }),
 });
 
-// Only exact documented API aliases are auto-detected. A provider route may be
-// named arbitrarily; do not infer capabilities from a provider name or substring.
+// Exact API aliases and explicitly recognized version names select guidance.
+// Never infer a model's capabilities from its provider name or a loose substring.
 const API_PROFILES = new Map([
   ['deepseek-v4-pro', 'deepseek-v4-pro'],
   ['deepseek-flash', 'deepseek-v4.1-flash-1017'],
   ['deepseek-v4-flash', 'deepseek-v4.1-flash-1017'],
   ['deepseek-v4-flash-vision-exp', 'deepseek-v4.1-flash-1017'],
+  ['deepseek-v4.1-flash-1017', 'deepseek-v4.1-flash-1017'],
+  ['deepseek-ai/deepseek-v4.1-flash-1017', 'deepseek-v4.1-flash-1017'],
+  ['deepseek-v4-pro-0813', 'deepseek-v4-pro'],
+  ['deepseek-ai/deepseek-v4-pro-0813', 'deepseek-v4-pro'],
 ]);
 
 /** Model identity comes only from the actual selection, never a provider or policy preset. */

@@ -8,13 +8,13 @@
 | V4 Pro | 跨模块改动先看依赖图与兼容性，比较最多两个方案，结合实际差异检查风险 |
 | V4.1 Flash 1017 | 先以符号、导入和诊断工具确认精确位置，再做可验证的小步修改；截断时缩小范围，失败时根据证据调整 |
 
-每套专用策略都会检查工具集；精简模式不会要求调用被关闭的扩展工具。没有匹配到 DeepSeek 官方别名时，自动使用通用增强。自托管或代理的自定义名称可以手动选择模型策略。
+每套专用策略都会检查工具集；精简模式不会要求调用被关闭的扩展工具。没有匹配到支持的 API 别名或明确版本名称时，自动使用通用增强。自托管或代理的其他自定义名称可以手动选择模型策略。热修版识别 `DeepSeek-V4.1-Flash-1017`、`DeepSeek-V4-Pro-0813` 及其 `deepseek-ai/` 前缀形式，不区分大小写。
 
 ## 模型名称与原生推理
 
 截至 2026-10-25，官方公开 API 使用 `deepseek-v4-pro` 与 `deepseek-flash`；Flash 别名对应 V4.1-Flash-1017，Pro 对应 V4-Pro-0813。别名随服务商更新，插件无法固定远端权重。本地策略 ID `deepseek-v4.1-flash-1017` 只用于选择指导文本，绝不替换 API 请求的模型名。[官方模型与定价](https://api-docs.deepseek.com/quick_start/pricing/)、[更新记录](https://api-docs.deepseek.com/updates/)。
 
-DeepSeek 的 API thinking 与 reasoning effort 由宿主模型设置控制。当前 DSH 在每步准备阶段捕获模型选择，并拒绝准备后改写推理强度。插件因此不接管或私自修改模型、provider、temperature 或 reasoning effort。[官方 thinking 指南](https://api-docs.deepseek.com/guides/thinking_mode/)、[DSH 模型选择契约](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/agent/src/runtime-types.ts)。
+DeepSeek 的 API thinking 与 reasoning effort 由宿主模型设置控制。插件不接管或私自修改模型、provider、temperature 或 reasoning effort。[官方 thinking 指南](https://api-docs.deepseek.com/guides/thinking_mode/)、[DSH 模型选择契约](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/agent/src/runtime-types.ts)。
 
 ## 增强开关
 
@@ -37,7 +37,9 @@ Claude 模式是视觉偏好与任务处理方式的参考，不切换模型、�
 
 we need to 模式不要求固定开头，不禁止 `let me`，不强制输出英语，不要求展示隐藏推理。插件只能添加上下文引导，不能改写模型权重或保证把内部思考转变为某种语言。能力收益应由具体任务评测判断。
 
-检测仅读取当前步骤捕获的 `modelSelection.model`（或诊断调用提供的 `modelId`），每次重新计算，不保留上一个模型。`vendor/DeepSeek-R1` 可匹配；provider 名称含 DeepSeek、手选 `modelPreset: deepseek-v4-pro`，或没有当前模型名称，均不构成启用条件。这个名称检测只决定可选模式是否适用，不用于推断模型 API 能力；Pro/Flash 专用策略的自动检测仍使用官方精确别名。
+在 `0.2.2-previre.1` 中，原生检测在宿主提示词组装完成后读取本步骤接受的 `variables.model`；没有交互选择的宿主可使用本 Agent 的 `options.model`，不会回退到上一次请求头。显式提供 `context.modelSelection` 的宿主则优先使用该值。每次重新计算，不保留上一个模型。`vendor/DeepSeek-R1` 可匹配；provider 名称含 DeepSeek、手选 `modelPreset: deepseek-v4-pro`，或没有当前模型名称，均不构成启用条件。这个名称检测只决定可选模式是否适用，不用于推断模型 API 能力；Pro/Flash 专用策略仍匹配精确别名和明确支持的版本名称。
+
+原 `0.2.2-previre` 只读取 `context.modelSelection`，但 DSH rc.3 不提供这个字段。结果是开关保存正常，却遗漏模式注入。修复没有增加常驻提示词，只修正本步骤模型解析与片段组装时机。`scripts/check-host.mjs` 使用真实宿主组件验证该路径；检查通过只证明提示词包含引导，不证明一定改变推理句式或提高代码质量。
 
 原生插件可以从 DSH 获得当前步骤的模型选择。独立 stdio MCP 服务没有这项信息，不能仅凭 `--model` 策略预设启用 we need to 引导；Claude 模式仍可使用。
 

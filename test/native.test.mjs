@@ -90,7 +90,7 @@ test('one native registration follows live thinking settings and keeps the base 
   assert.equal(sections.length, 1, 'Live updates do not add duplicate sections');
 });
 
-test('native auto policy uses each captured step model without mutating request selection', () => {
+test('section provider accepts an explicitly supplied model-selection context without mutation', () => {
   const { ctx, sections } = host();
   apply(ctx);
   const pro = Object.freeze({ provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'low' });
@@ -105,7 +105,7 @@ test('native auto policy uses each captured step model without mutating request 
   assert.deepEqual(flash, { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' });
 });
 
-test('native live modes follow saved switches and each current step model without stale additions', () => {
+test('section provider follows saved switches with an explicit model-selection fixture', () => {
   const state = { claudeMode: false, weNeedToThinking: false, enhancedThinking: true };
   const options = Object.fromEntries(Object.keys(state).map(key => [key, { get: () => state[key] }]));
   const { ctx, sections } = host();

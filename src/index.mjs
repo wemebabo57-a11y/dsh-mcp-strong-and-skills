@@ -1,6 +1,7 @@
-import { StrongEngine, TOOLS, BASE_TOOLS, buildPolicy } from './engine.mjs';
+import { StrongEngine, TOOLS, BASE_TOOLS } from './engine.mjs';
 import { snapshotConfig, loadNativeConfigSchema } from './native-config.mjs';
 import { registerSettingsHost } from './settings-host.mjs';
+import { installNativePolicy } from './native-policy.mjs';
 
 export const name = 'strong-skills';
 export const inject = ['tools', 'systemPrompt', 'workingDirectory'];
@@ -10,8 +11,7 @@ export function apply(ctx, options = {}) {
   snapshotConfig(options); // Fail invalid composition before contributing anything.
   const currentConfig = () => snapshotConfig(options);
   registerSettingsHost(ctx);
-  ctx.systemPrompt.section({ name: 'strong-skills:policy', order: 650,
-    text: (context = {}) => buildPolicy(currentConfig(), { selection: context.modelSelection }), interpolate: false });
+  installNativePolicy(ctx, currentConfig);
   for (const tool of TOOLS) {
     ctx.tools.register({
       name: tool.name, description: tool.description, parameters: tool.inputSchema,

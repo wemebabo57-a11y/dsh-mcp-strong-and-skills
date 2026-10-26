@@ -2,6 +2,23 @@
 
 Initial contract review on 2026-10-24; updated for v0.2 on 2026-10-25 against official upstream source and an isolated real DSH 0.2.1-rc.3 Web instance.
 
+## 0.2.2-previre.1 prompt-injection correction — 2026-10-26
+
+The original native callback incorrectly expected `context.modelSelection`. The published rc.3 `assembleContextFor()` supplies only Agent, scope, and optional signal. Its real `installModelSelection()` captures the current route and publishes `variables.model` / `variables.provider` after its assembly waterfall delegates. As a result, the original mode could be saved and enabled but absent from the final policy. This was reproduced with the user's exact model name, `deepseek-ai/DeepSeek-V4.1-Flash-1017`; the desktop app's packaged rc.3 Agent code was also inspected read-only and uses the same contract. Earlier UI and hand-built context fixtures did not cover this defect.
+
+The hotfix registers an outer assembly waterfall, waits for the real host to finish, then rebuilds only `strong-skills:policy` using that accepted route. It preserves other sections, variables, tools, and host complete-prompt precedence. An explicit context selection is supported when supplied; Agent options are the fallback for entry points without captured variables. Previous request headers and global default-model settings are not used as a current-model substitute. Explicit version names also map to their matching Pro/Flash guides without changing the API route.
+
+Verification: 111 automated tests plus 7 real-host component checks in `scripts/check-host.mjs`. The integration script imports the published Cordis, Agent, Scope and SystemPrompt implementations, calls the real `assembleContextFor()` and `installModelSelection()`, and checks the final rendered prompt, current model changes, cross-Agent isolation, live switches and complete prompts. It uses no credentials, user profile, server or model inference. This checks injection, not the model's response quality or wording.
+
+Reproduce locally after installing an isolated pinned host, with no installation scripts:
+
+```sh
+npm install --prefix .tmp/host-contract --no-package-lock --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
+node scripts/check-host.mjs --runtime .tmp/host-contract
+```
+
+CI runs the same check in a temporary directory independently of the four existing OS/Node checks. It fails when host dependencies are absent rather than substituting an invented context fixture.
+
 ## 0.2.2previre mode boundary
 
 The release display name is `0.2.2previre`; its package version is the SemVer prerelease `0.2.2-previre`. The two optional boolean fields `claudeMode` and `weNeedToThinking` default to false and reuse the existing volatile Config and native settings form. No new tool or runtime dependency is required.
@@ -10,7 +27,7 @@ Claude mode applies frontend design preferences across models and adds goal/evid
 
 The we need to guidance is active only when its preference and enhanced thinking are enabled and the actual current step's captured model name contains `deepseek`, case-insensitively, or `深度求索`. Provider names and manually selected policy presets do not bypass this gate; missing model context leaves it inactive. Model switching is evaluated on each prompt assembly. This is a guidance example, not a required reasoning prefix, a ban on `let me`, or a request to reveal private reasoning. It makes no measured model-quality claim. Standalone MCP initialization has no current-step model selection and therefore does not activate this guidance based on a policy preset alone.
 
-The current release passes 108 local automated tests, covering mode logic, accepted-value persistence, defaults, model gates, and bundle behavior. In an isolated real DSH 0.2.1-rc.3 Web host, both modes initially defaulted to false with enhanced thinking true. Both were enabled and remained true after reload; disabling enhanced thinking retained both preferences and displayed the paused notice. Enhanced thinking was then restored and both modes disabled, with false/false/true confirmed after reload. Runtime browser errors were empty, requests stayed on localhost, and no model generation or chat message was sent. Current controls were also rendered with real React at 320, 360, and 420px in both languages without horizontal overflow. This establishes settings behavior, not a model-quality or provider-inference benchmark.
+The original preview passed 108 local automated tests, covering mode logic, accepted-value persistence, defaults, model gates, and bundle behavior. In an isolated real DSH 0.2.1-rc.3 Web host, both modes initially defaulted to false with enhanced thinking true. Both were enabled and remained true after reload; disabling enhanced thinking retained both preferences and displayed the paused notice. Enhanced thinking was then restored and both modes disabled, with false/false/true confirmed after reload. Runtime browser errors were empty, requests stayed on localhost, and no model generation or chat message was sent. Current controls were also rendered with real React at 320, 360, and 420px in both languages without horizontal overflow. This establishes settings behavior, not a model-quality or provider-inference benchmark.
 
 ## v0.2 live configuration and client surface
 
@@ -20,7 +37,7 @@ The browser entry is a committed lazy client-factory bundle at `client/client.js
 
 The page registers both `settings.section` (`strong-skills`) and keyed `plugins.bundle.config` (`dsh-strong-skills`). Since v0.2.1 these contributions remain registered for the client's lifetime, independently of whether the Host currently serves the `strong-skills` Config form. An unavailable form renders a diagnostic page; its store subscription restores the controls when the form becomes ready. Writes remain restricted to ready, writable forms. Reads, writes, resets, revision fencing, and accepted-value recovery go through the real ConfigForms contract; no localStorage or private HTTP API is used. The optional host settings presentation policy is registered against the owning plugin fiber. [Settings Config projection](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/settings/settings/README.md), [client form contracts](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-settings/src/client/config-form-types.ts), [Settings slots](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-settings/src/client/contract/slots.ts), [plugin configuration slots](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-plugin-manager/README.md).
 
-Prompt callbacks use the current step's captured `modelSelection`. Optional tools have live registration `when` predicates, and their dispatch is also rejected when disabled. Reasoning effort and actual model/provider selection stay host-owned. Older Harness versions lacking volatile Config or these client contracts cannot provide this settings surface and should be upgraded before use.
+Since the hotfix, the post-assembly callback uses the current step's captured model variables as described above. Optional tools have live registration `when` predicates, and their dispatch is also rejected when disabled. Reasoning effort and actual model/provider selection stay host-owned. Older Harness versions lacking volatile Config or these client contracts cannot provide this settings surface and should be upgraded before use.
 
 Verification covers the real schema library, controller and slot integration fixtures, generated bundle freshness, real React rendering in desktop/mobile browser previews, native execution contracts and stdio protocol subprocesses. The actual rc.3 Web host was also installed under an isolated DSH_HOME, the bundle linked with `dsh plugin`, and the dedicated Settings page opened in a real browser. The enhanced-thinking switch changed true → false, remained false after reload, and was restored to true. Runtime browser errors were empty. Test browser requests stayed on localhost; no model generation or chat message was sent. This confirms settings-page loading and persistence, not a coding benchmark or exhaustive provider integration.
 

@@ -24,12 +24,23 @@ test('exact official API aliases select rolling model policies without changing 
 });
 
 test('unknown, absent and lookalike IDs use the generic policy', () => {
-  for (const selection of [undefined, null, '', 17, {}, { provider: 'deepseek-official' }, 'other', 'vendor/deepseek-flash', 'not-deepseek-v4-pro', 'deepseek-v4.1-flash-1017']) {
+  for (const selection of [undefined, null, '', 17, {}, { provider: 'deepseek-official' }, 'other', 'vendor/deepseek-flash', 'not-deepseek-v4-pro', 'deepseek-ai/custom-model']) {
     const profile = getModelProfile(selection);
     assert.equal(profile.id, 'generic');
     assert.equal(profile.apiModel, null);
     assert.equal(profile.detectedFrom, 'fallback');
   }
+});
+
+test('explicit version names activate the matching guide while preserving the selected API route', () => {
+  for (const model of ['deepseek-v4.1-flash-1017', 'deepseek-ai/DeepSeek-V4.1-Flash-1017']) {
+    const selection = Object.freeze({ provider: 'proxy', model });
+    assert.equal(getModelProfile(selection).family, 'flash');
+    assert.equal(getModelProfile(selection).selectedModel, model);
+    assert.match(buildEnhancementPolicy({}, { selection }), /Flash：/);
+    assert.deepEqual(selection, { provider: 'proxy', model });
+  }
+  for (const model of ['DeepSeek-V4-Pro-0813', 'deepseek-ai/DeepSeek-V4-Pro-0813']) assert.equal(getModelProfile(model).family, 'pro');
 });
 
 test('manual policy presets override auto detection without manufacturing an API snapshot ID', () => {

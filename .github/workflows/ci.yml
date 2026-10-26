@@ -34,3 +34,22 @@ jobs:
           package-manager-cache: false
       - name: Check and test
         run: npm run check && npm test
+
+  host-contract:
+    name: Real DSH rc.3 prompt assembly
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+      - name: Install an isolated host without scripts
+        run: npm install --prefix "$RUNNER_TEMP/strong-skills-host" --no-package-lock --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
+      - name: Verify real model selection and final system prompt
+        run: node scripts/check-host.mjs --runtime "$RUNNER_TEMP/strong-skills-host"
