@@ -3,19 +3,19 @@ import { WorkspaceError } from './workspace.mjs';
 
 export const EXTRA_TOOLS = Object.freeze([
   { name: 'strong_code', description: '只读代码定位：symbols 声明；imports 静态 JS/TS 导入图；diagnostics 解析 text 中的报错并安全补充源码。启发式，有扫描上限。', inputSchema: { type: 'object', properties: {
-    action: { type: 'string', enum: ['symbols', 'imports', 'diagnostics'] }, path: { type: 'string', maxLength: 1000 }, text: { type: 'string', maxLength: 5000 }, limit: { type: 'integer', minimum: 1, maximum: 80 },
+    action: { type: 'string', enum: ['symbols', 'imports', 'diagnostics'] }, path: { type: 'string', maxLength: 1000 }, text: { type: 'string', maxLength: 5000 }, limit: { type: 'integer', minimum: 1, maximum: 500, description: '普通模式最多 80；无限 token 模式最多 500' },
   }, required: ['action'], additionalProperties: false } },
   { name: 'strong_review', description: '只读审查实际 diff：变更文件、风险位置、相关测试及已有验证脚本。仅建议，不运行命令。', inputSchema: { type: 'object', properties: {
-    path: { type: 'string', maxLength: 1000 }, limit: { type: 'integer', minimum: 1, maximum: 80 },
+    path: { type: 'string', maxLength: 1000 }, limit: { type: 'integer', minimum: 1, maximum: 500, description: '普通模式最多 80；无限 token 模式最多 500' },
   }, additionalProperties: false } },
 ]);
 
 const SOURCE_EXTENSIONS = /\.(?:[cm]?[jt]sx?|py|go|rs|java|cs|php|rb)$/i;
 const SCRIPT_EXTENSIONS = /\.[cm]?[jt]sx?$/i;
-const MAX_READS = 40;
-const MAX_LINES = 2400;
-const MAX_CHARS = 160000;
-const MAX_SOURCE_FILES = 32;
+const CODE_LIMITS = Object.freeze({
+  normal: Object.freeze({ reads: 40, lines: 2400, chars: 160000, files: 32 }),
+  unlimited: Object.freeze({ reads: 120, lines: 8000, chars: 640000, files: 128 }),
+});
 const own = (object, key, fallback) => Object.hasOwn(object, key) ? object[key] : fallback;
 const clipped = (value, max = 200) => {
   if (value.length <= max) return value;
@@ -45,6 +45,7 @@ function validate(name, args) {
 
 // Reduce complete JSON values; output is never a sliced JSON string.
 function fit(result, maxChars) {
+  if (maxChars === Number.POSITIVE_INFINITY) { result.truncated = Boolean(result.truncated); return result; }
   const budget = Number.isInteger(maxChars) ? Math.max(1000, Math.min(20000, maxChars)) : 6000;
   result.truncated = Boolean(result.truncated);
   while (JSON.stringify(result).length > budget) {
@@ -120,7 +121,8 @@ async function inventory(workspace, selected, signal) {
   return workspace.run({ action: 'map', path: selected, limit: 200 }, { signal });
 }
 
-async function sourceFiles(workspace, selected, signal, includeRootInventory = false) {
+async function sourceFiles(workspace, selected, signal, includeRootInventory = false, limits = CODE_LIMITS.normal) {
+  const { reads: MAX_READS, lines: MAX_LINES, chars: MAX_CHARS, files: MAX_SOURCE_FILES } = limits;
   const map = await inventory(workspace, selected, signal);
   cancelled(signal);
   const roots = includeRootInventory && selected !== '.' ? await inventory(workspace, '.', signal) : map;
@@ -136,8 +138,10 @@ async function sourceFiles(workspace, selected, signal, includeRootInventory = f
     let start = 1;
     const lines = [];
     let total = 0;
-    while (start <= 800 && reads < MAX_READS && lineCount < MAX_LINES && charCount < MAX_CHARS) {
-      const read = await workspace.run({ action: 'read', path: name, start, limit: Math.min(200, MAX_LINES - lineCount, 801 - start) }, { signal });
+    const perFileLines = limits === CODE_LIMITS.unlimited ? 8000 : 800;
+    const readLimit = limits === CODE_LIMITS.unlimited ? 1000 : 200;
+    while (start <= perFileLines && reads < MAX_READS && lineCount < MAX_LINES && charCount < MAX_CHARS) {
+      const read = await workspace.run({ action: 'read', path: name, start, limit: Math.min(readLimit, MAX_LINES - lineCount, perFileLines + 1 - start) }, { signal });
       reads++;
       total = read.totalLines ?? 0;
       if (!read.lines?.length) { truncated ||= total >= start; break; }
@@ -405,13 +409,17 @@ async function review(workspace, args, signal) {
 export async function runCodeTool(name, args = {}, { workspace, config = {}, signal } = {}) {
   cancelled(signal);
   validate(name, args);
+  const limits = config.unlimitedTokens === true ? CODE_LIMITS.unlimited : CODE_LIMITS.normal;
+  const maxItems = limits === CODE_LIMITS.unlimited ? 500 : 80;
+  const itemLimit = Math.min(own(args, 'limit', limits === CODE_LIMITS.unlimited ? 500 : 40), maxItems);
+  const normalized = { ...args, limit: itemLimit };
   let result;
-  if (name === 'strong_review') result = await review(workspace, args, signal);
-  else if (args.action === 'diagnostics') result = await diagnostics(workspace, args, signal);
+  if (name === 'strong_review') result = await review(workspace, normalized, signal);
+  else if (args.action === 'diagnostics') result = await diagnostics(workspace, normalized, signal);
   else {
-    const scan = await sourceFiles(workspace, own(args, 'path', '.'), signal, args.action === 'imports');
-    result = args.action === 'symbols' ? symbols(scan, own(args, 'limit', 40), signal) : imports(scan, own(args, 'limit', 40), signal);
+    const scan = await sourceFiles(workspace, own(args, 'path', '.'), signal, args.action === 'imports', limits);
+    result = args.action === 'symbols' ? symbols(scan, itemLimit, signal) : imports(scan, itemLimit, signal);
   }
   cancelled(signal);
-  return fit(result, config.maxOutputChars ?? workspace.maxOutputChars);
+  return fit(result, config.unlimitedTokens === true ? Number.POSITIVE_INFINITY : config.maxOutputChars ?? workspace.maxOutputChars);
 }

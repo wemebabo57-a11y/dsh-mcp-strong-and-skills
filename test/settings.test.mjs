@@ -88,7 +88,7 @@ test('host refusal/reconnect updates and transport errors preserve accepted sett
 test('invalid UI values never reach the Host and reset clears overrides atomically', async () => {
   const f = fixture();
   const controller = createSettingsController(f.form);
-  for (const [field, value] of [['thinkingLevel', 'extreme'], ['enhancedThinking', 'false'], ['claudeMode', 'true'], ['weNeedToThinking', 1], ['brandIntent', 'x'.repeat(201)], ['maxSkillLoads', 3], ['maxFiles', 1.5]]) {
+  for (const [field, value] of [['thinkingLevel', 'extreme'], ['enhancedThinking', 'false'], ['claudeMode', 'true'], ['weNeedToThinking', 1], ['unlimitedTokens', 'true'], ['brandIntent', 'x'.repeat(201)], ['maxSkillLoads', 3], ['maxFiles', 1.5]]) {
     assert.equal(await controller.set(field, value), false);
   }
   assert.equal(f.writes.length, 0);
@@ -101,12 +101,14 @@ test('older Host profiles show both modes off without writing defaults and mode 
   const previous = { ...defaults() };
   delete previous.claudeMode;
   delete previous.weNeedToThinking;
+  delete previous.unlimitedTokens;
   const f = fixture({ status: 'ready', writable: true, value: previous });
   const controller = createSettingsController(f.form);
   assert.equal(controller.store.getSnapshot().value.claudeMode, false);
   assert.equal(controller.store.getSnapshot().value.weNeedToThinking, false);
+  assert.equal(controller.store.getSnapshot().value.unlimitedTokens, false);
   assert.deepEqual(f.writes, []);
-  for (const field of ['claudeMode', 'weNeedToThinking']) {
+  for (const field of ['claudeMode', 'weNeedToThinking', 'unlimitedTokens']) {
     assert.equal(await controller.set(field, true), true);
     assert.equal(controller.store.getSnapshot().value[field], true);
   }
@@ -116,9 +118,11 @@ test('older Host profiles show both modes off without writing defaults and mode 
   assert.equal(await controller.reset(), true);
   assert.equal(controller.store.getSnapshot().value.claudeMode, false);
   assert.equal(controller.store.getSnapshot().value.weNeedToThinking, false);
+  assert.equal(controller.store.getSnapshot().value.unlimitedTokens, false);
   const resets = f.writes.at(-1).ops.map(operation => operation.path[0]);
   assert.ok(resets.includes('claudeMode'));
   assert.ok(resets.includes('weNeedToThinking'));
+  assert.ok(resets.includes('unlimitedTokens'));
   controller.dispose();
 });
 
@@ -323,7 +327,7 @@ test('both native surfaces expose bilingual mode switches, persist choices, and 
     for (const surface of ['settings.section', 'plugins.bundle.config']) {
       const tree = ui.render(surface, dictionary);
       assert.ok(content(tree).includes(dictionary.modes));
-      for (const field of ['claudeMode', 'weNeedToThinking']) {
+      for (const field of ['claudeMode', 'weNeedToThinking', 'unlimitedTokens']) {
         const input = control(tree, field);
         const nodes = descendants(tree);
         const label = nodes.find(node => node.type === 'label' && node.props.htmlFor === input.props.id);
@@ -335,7 +339,7 @@ test('both native surfaces expose bilingual mode switches, persist choices, and 
       }
     }
   }
-  for (const field of ['claudeMode', 'weNeedToThinking']) {
+  for (const field of ['claudeMode', 'weNeedToThinking', 'unlimitedTokens']) {
     control(ui.render(), field).props.onChange({ currentTarget: { checked: true } });
     await tick();
     assert.equal(f.form.getSnapshot().value[field], true);
@@ -345,14 +349,15 @@ test('both native surfaces expose bilingual mode switches, persist choices, and 
   for (const dictionary of [EN, ZH]) {
     const tree = ui.render('settings.section', dictionary);
     assert.ok(content(tree).includes(dictionary.modesThinkingOff));
-    for (const field of ['claudeMode', 'weNeedToThinking']) {
+    assert.ok(content(tree).includes(dictionary.unlimitedOn));
+    for (const field of ['claudeMode', 'weNeedToThinking', 'unlimitedTokens']) {
       assert.equal(control(tree, field).props.checked, true);
       assert.equal(control(tree, field).props.disabled, false, 'preferences remain editable while planning is paused');
     }
   }
   ui.dispose();
   const reopened = pluginFixture(f.form);
-  for (const field of ['claudeMode', 'weNeedToThinking']) assert.equal(control(reopened.render(), field).props.checked, true);
+  for (const field of ['claudeMode', 'weNeedToThinking', 'unlimitedTokens']) assert.equal(control(reopened.render(), field).props.checked, true);
   reopened.dispose();
 });
 
@@ -377,7 +382,7 @@ test('packaged bundle is fresh, registers lazily, and runs the same client surfa
   assert.ok(content(ui.render()).includes(EN.unavailable));
   f.form.publish({ status: 'ready', writable: true, value: defaults() });
   assert.ok(control(ui.render('plugins.bundle.config'), 'enhancedThinking'));
-  for (const field of ['claudeMode', 'weNeedToThinking']) {
+  for (const field of ['claudeMode', 'weNeedToThinking', 'unlimitedTokens']) {
     control(ui.render('plugins.bundle.config'), field).props.onChange({ currentTarget: { checked: true } });
     await tick();
     assert.equal(control(ui.render(), field).props.checked, true);

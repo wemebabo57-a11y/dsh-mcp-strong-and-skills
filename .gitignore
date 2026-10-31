@@ -18,6 +18,7 @@ coverage/
 *.rar
 
 # Local credentials and environment configuration.
+github-token.txt
 .env
 .env.*
 !.env.example

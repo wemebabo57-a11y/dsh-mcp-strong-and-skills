@@ -92,7 +92,7 @@ test('engine rejects invalid skill ids, traversal, mixed selectors and invalid l
   for (const id of ['unknown', '../debug', '..\\debug', '../../README.md', '/etc/passwd', 'C:\\secrets', '__proto__']) {
     await assert.rejects(engine.call('strong_skill', { id }), /Invalid id/);
   }
-  for (const limit of [0, -1, 3, 1.5, '2', null]) {
+  for (const limit of [0, -1, 9, 1.5, '2', null]) {
     await assert.rejects(engine.call('strong_skill', { query: 'debug', limit }));
   }
   for (const args of [null, [], 'debug', { id: 4 }, { query: 7 }, { query: 'x'.repeat(501) }, { unknown: true }]) {

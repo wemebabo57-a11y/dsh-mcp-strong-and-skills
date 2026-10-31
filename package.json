@@ -1,6 +1,6 @@
 {
   "name": "dsh-strong-skills",
-  "version": "0.2.2-previre.1",
+  "version": "0.3.0",
   "description": "Lean coding skills and bounded workspace tools for DeepSeek Harness, with a built-in stdio MCP server.",
   "repository": { "type": "git", "url": "git+https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills.git" },
   "homepage": "https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills#readme",

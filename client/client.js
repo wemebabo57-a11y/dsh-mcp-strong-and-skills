@@ -7,7 +7,7 @@ const SETTINGS_ENTRY = 'strong-skills';
 const SETTINGS_PACKAGE = 'dsh-strong-skills';
 const SETTINGS_FIELDS = Object.freeze([
   'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet',
-  'claudeMode', 'weNeedToThinking',
+  'claudeMode', 'weNeedToThinking', 'unlimitedTokens',
   'profile', 'allowBrandColors', 'brandIntent', 'maxOutputChars', 'maxFiles',
   'maxFileBytes', 'maxSkillLoads',
 ]);
@@ -34,7 +34,7 @@ const PROFILE_LIMITS = Object.freeze({
 /** Config's optional limit overrides inherit their runtime defaults from the selected profile. */
 function displaySettings(value) {
   if (value === undefined) return undefined;
-  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false };
+  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false };
   const resolved = { ...value };
   for (const [field, fallback] of Object.entries(defaults)) {
     if (resolved[field] === undefined) resolved[field] = fallback;
@@ -44,7 +44,7 @@ function displaySettings(value) {
 
 function validateSetting(field, value) {
   if (!SETTINGS_FIELDS.includes(field)) throw new TypeError(`Unknown setting: ${field}`);
-  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking'].includes(field)) {
+  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens'].includes(field)) {
     if (typeof value !== 'boolean') throw new TypeError(`${field} must be boolean`);
   } else if (field === 'brandIntent') {
     if (typeof value !== 'string' || value.length > 200) throw new TypeError('Brand intent must be at most 200 characters');
@@ -180,11 +180,13 @@ const EN = Object.freeze({
   pro: 'DeepSeek V4 Pro', flash: 'DeepSeek V4.1 Flash · 1017', generic: 'Universal',
   modelNote: 'Automatic uses specialized guidance for supported DeepSeek models and universal enhancements for all others. Choose the actual model and provider reasoning settings in Settings → Models. The Flash strategy follows the rolling deepseek-flash API model.',
   tools: 'Tool set', toolsHint: 'Expanded adds navigation and inspection tools; compact keeps the core tools.', compact: 'Compact', expanded: 'Expanded',
-  modes: 'Working modes', modesHint: 'Optional guidance; both modes start off and can be combined.',
+  modes: 'Working modes', modesHint: 'Optional guidance; all modes start off and can be combined.',
   claudeMode: 'Claude mode', claudeModeHint: 'For every model: frontend inspiration from warm neutrals, clear hierarchy, whitespace, and restrained accents; task guidance follows goals, evidence, and verification. Your project’s brand comes first.',
-  weNeedToThinking: 'we need to thinking', weNeedToThinkingHint: 'Only applies when the current model name contains “deepseek” (case insensitive). Guides shared goals → evidence → action → checks, without requiring a phrase or language. Other models skip it.',
-  modesNote: 'These modes provide style and task guidance, without switching models or reproducing Claude’s private reasoning.',
-  modesThinkingOff: 'Enhanced thinking is off. Claude frontend guidance remains active when enabled; planning guidance from both modes is paused. Your mode preferences stay saved.',
+  weNeedToThinking: 'we need to thinking', weNeedToThinkingHint: 'For every model: asks the model to open its thinking with a “We need to …” goal statement, then move through facts, evidence, action, verification, and risks. Works with any provider or model name.',
+  unlimitedTokens: 'Unlimited token mode', unlimitedTokensHint: 'For every model: removes this plugin’s output caps and context limits, expands skill reads to eight, and asks for exhaustive planning, implementation, and verification. Token use increases substantially.',
+  modesNote: 'These modes provide style and task guidance, without switching models or reproducing Claude’s private reasoning. Unlimited token mode trades tokens for completeness.',
+  unlimitedOn: 'Unlimited token mode is on: tool results are not truncated, workspace reads use maximum bounds, and skill reads can return up to eight bodies. Token use will increase substantially.',
+  modesThinkingOff: 'Enhanced thinking is off. Claude frontend guidance remains active; Claude planning guidance is paused. The we need to mode and unlimited token mode continue to work. Your mode preferences stay saved.',
   budget: 'Resource budget', profile: 'Profile', profileHint: 'Set the default amount of workspace context and tool output.', lean: 'Lean', thorough: 'Thorough',
   design: 'Design preferences', brand: 'Allow brand colors', brandHint: 'Use brand colors when a project needs them.', intent: 'Brand intent', intentHint: 'Optional design direction, up to 200 characters. Saved when you leave the field.',
   advanced: 'Advanced limits', advancedHint: 'Custom limits override profile defaults. Number edits save when you leave the field.',
@@ -208,11 +210,13 @@ const ZH = Object.freeze({
   model: '模型策略', modelHint: '所有模型均有通用增强，DeepSeek 可选专用指导；不切换实际模型。', pro: 'DeepSeek V4 Pro', flash: 'DeepSeek V4.1 Flash · 1017', generic: '通用增强',
   modelNote: '「自动」为支持的 DeepSeek 模型应用专用指导，其他模型保留全部通用增强。实际模型及推理参数请在「设置 → 模型」中选择。Flash 策略对应滚动更新的 deepseek-flash API 模型。',
   tools: '工具集', toolsHint: '扩展模式增加导航与检查工具；精简模式保留核心工具。', compact: '精简', expanded: '扩展',
-  modes: '工作模式', modesHint: '按需开启，两种模式默认关闭，可同时使用。',
+  modes: '工作模式', modesHint: '按需开启，所有模式默认关闭，可同时使用。',
   claudeMode: 'Claude 模式', claudeModeHint: '适用于所有模型：前端参考暖中性色、清晰层级、留白与克制的强调色；解题从目标、证据到验证展开。优先尊重项目品牌。',
-  weNeedToThinking: 'we need to 思维', weNeedToThinkingHint: '仅在当前模型名称含 deepseek 时生效，不区分大小写。以共同目标 → 证据 → 行动 → 检查引导，不限定句式或语言；其他模型自动跳过。',
-  modesNote: '模式提供风格与解题方法引导，不切换模型，也不复现 Claude 的内部推理。',
-  modesThinkingOff: '增强思考已关闭：已开启的 Claude 前端指导仍生效，两种模式的规划引导暂停；模式偏好继续保存。',
+  weNeedToThinking: 'we need to 思维', weNeedToThinkingHint: '对所有模型生效：思考开头先写“We need to …”明确目标，再按事实、证据、行动、验证与风险展开；不依赖模型名称或服务商。',
+  unlimitedTokens: '无限 token 模式', unlimitedTokensHint: '对所有模型生效：取消本插件输出上限与上下文限制，技能读取放宽到 8 个，并要求穷尽式规划、实现与验证。token 消耗会显著增加。',
+  modesNote: '模式提供风格与解题方法引导，不切换模型，也不复现 Claude 的内部推理；无限 token 模式用更多消耗换取完整性与验证深度。',
+  unlimitedOn: '无限 token 模式已开启：工具结果不再截断，工作区按最大范围读取，单次最多读取 8 个技能正文。token 消耗会显著增加。',
+  modesThinkingOff: '增强思考已关闭：Claude 前端指导仍生效，其规划引导暂停；we need to 思维与无限 token 模式继续工作，模式偏好继续保存。',
   budget: '资源预算', profile: '资源档位', profileHint: '设置工作区上下文与工具输出的默认用量。', lean: '轻量', thorough: '详尽',
   design: '设计偏好', brand: '允许品牌色', brandHint: '项目需要时使用品牌色。', intent: '品牌意图', intentHint: '可选的设计方向，最多 200 字；离开输入框时保存。',
   advanced: '高级限制', advancedHint: '自定义限制优先于资源档位的默认值；离开数字输入框时保存。',
@@ -296,8 +300,11 @@ function createSettingsSection(h) {
         h('p', { className: 'strong-settings__hint' }, t('modesHint')),
         toggle('claudeMode', 'claudeMode', 'claudeModeHint'),
         toggle('weNeedToThinking', 'weNeedToThinking', 'weNeedToThinkingHint'),
+        toggle('unlimitedTokens', 'unlimitedTokens', 'unlimitedTokensHint'),
         h('p', { className: 'strong-settings__hint' }, t('modesNote')),
-        !value.enhancedThinking && (value.claudeMode || value.weNeedToThinking)
+        value.unlimitedTokens
+          ? h('p', { className: 'strong-settings__notice', role: 'status' }, t('unlimitedOn')) : null,
+        !value.enhancedThinking && value.claudeMode
           ? h('p', { className: 'strong-settings__notice', role: 'status' }, t('modesThinkingOff')) : null),
       h('div', { className: 'strong-settings__group' },
         h('h3', null, t('budget')),

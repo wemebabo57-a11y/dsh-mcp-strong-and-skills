@@ -104,7 +104,7 @@ test('enhancement uses bounded review and material questions without demanding i
   assert.match(normal, /1–3个关键问题/);
   assert.match(normal, /一次自审/);
   assert.match(normal, /已有答案不重复问/);
-  assert.match(normal, /不展示内部推理/);
+  assert.match(normal, /不逐字复述内部推理/);
   const deep = buildEnhancementPolicy({ thinkingLevel: 'deep' });
   assert.ok(deep.length > normal.length);
   assert.match(deep, /一次有界反例检查/);
@@ -116,8 +116,8 @@ test('all default model presets stay within a small reproducible incremental tok
   for (const modelPreset of MODEL_PRESETS) {
     for (const toolSet of ['compact', 'expanded']) {
       const config = Object.freeze({ modelPreset, toolSet });
-      assert.ok(estimateTokens(buildEnhancementPolicy(config)) < 350, `${modelPreset}/${toolSet}`);
-      assert.ok(estimateTokens(buildEnhancementPolicy({ ...config, thinkingLevel: 'deep' })) <= 400, `${modelPreset}/${toolSet}`);
+      assert.ok(estimateTokens(buildEnhancementPolicy(config)) < 450, `${modelPreset}/${toolSet}`);
+      assert.ok(estimateTokens(buildEnhancementPolicy({ ...config, thinkingLevel: 'deep' })) <= 500, `${modelPreset}/${toolSet}`);
       assert.deepEqual(config, { modelPreset, toolSet });
     }
   }

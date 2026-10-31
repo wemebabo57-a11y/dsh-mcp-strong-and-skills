@@ -2,30 +2,31 @@
 
 # dsh-strong-skills
 
-**让方法按需到场，让上下文保持轻量。**  
-On-demand skills. Bounded context. Built for DeepSeek Harness.
+**方法按需到场，上下文按任务展开。**<br>
+On-demand skills. Bounded by default. Unlimited when you ask.
 
 [![Node.js ≥24.9](https://img.shields.io/badge/Node.js-%E2%89%A524.9-6d7950?style=flat-square)](https://nodejs.org/)
 [![CI](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-cb603f?style=flat-square)](LICENSE)
 [![Runtime dependencies: 0](https://img.shields.io/badge/runtime_dependencies-0-242720?style=flat-square)](package.json)
-[![Tests: Node.js](https://img.shields.io/badge/tests-Node.js-6d7950?style=flat-square)](test)
+[![Tests: 116](https://img.shields.io/badge/tests-116-6d7950?style=flat-square)](test)
 
-[快速开始](#快速开始) · [插件设置](#插件设置与增强思考) · [能力一览](#能力一览) · [MCP 接入](#mcp-接入) · [上下文预算](#上下文预算)
+[快速开始](#快速开始) · [插件设置](#插件设置) · [三种增强模式](#三种增强模式) · [能力一览](#能力一览) · [MCP 接入](#mcp-接入) · [上下文预算](#上下文预算)
 
 </div>
 
 ![8 个按需技能、4 个工具入口、轻量上下文](docs/assets/hero.svg)
 
-面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的轻量编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略**。内置 8 个按需技能、4 个工具入口、可关闭的增强思考，以及独立的 stdio MCP 服务。
+面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略；需要时可以开启完全不省 token 的无限模式。** 内置 8 个按需技能、4 个工具入口、可关闭的增强思考，以及独立的 stdio MCP 服务。
 
-**0.2.2previre 预览版**新增可选的「Claude 模式」与「we need to 思维」，可在独立设置页分别开启。版本展示名保留 `0.2.2previre`，包版本按 SemVer 写作 `0.2.2-previre`。
-
-**当前热修版：`0.2.2-previre.1`。** 修复 DSH rc.3 中当前模型读取错误：旧版虽然能保存开关，但 we need to 引导和自动模型专用策略可能没有进入最终提示词。现已改为在宿主组装完成后读取本步骤的模型变量，并支持 `deepseek-ai/DeepSeek-V4.1-Flash-1017` 等明确版本名称。已安装旧预览版的用户请重新安装当前仓库来源并完全重启 DSH。
+**0.3.0 是本轮功能更新：**
+- **修复 we need to 思维**：旧版只有在模型名含 `deepseek` 且增强思考开启时才注入，其他模型或关闭增强思考后勾选确实没有效果。现在只取决于该开关，所有模型、增强思考关闭时都生效，并明确要求先写下 `We need to …` 目标，再展开证据、行动与验证。
+- **提升通用能力**：强化契约核对、最小完整改动、失败边界、自审与按证据验证；Pro/Flash 策略同步加强。
+- **新增无限 token 模式**：取消本插件默认的输出与读取截断，开放全部工具和最多 8 个技能正文，要求完整规划、完整实现与尽可能全面的验证。它不是“少用 token”的档位，而是主动用更多消耗换完整性。
 
 模型继续使用宿主当前 profile 启用的编辑、终端、联网、浏览器与子代理工具。本插件在本地加载技能、检索文件，不在后台发起模型请求。
 
-> **验证状态：** 111 项自动化测试通过，另有基于真实 DSH rc.3 模块的 7 项集成检查，覆盖最终提示词、当前模型切换、多会话隔离与开关。原预览版的设置保存和中英文移动布局验证仍有效，但不能证明模型引导成功注入；本次补上该层检查。没有发起模型生成或付费模型请求，尚未进行模型能力基准评测，见[兼容性记录](docs/compatibility.md)。
+> **验证状态：** 116 项自动化测试通过；另有 9 项基于真实 DSH rc.5 组件的集成检查，覆盖最终提示词、当前模型切换、多会话隔离、实时开关、完整自定义提示词与无限模式策略。没有发起模型生成或付费模型请求，也未进行模型能力基准评测。详见[兼容性记录](docs/compatibility.md)。
 
 ## 快速开始
 
@@ -48,14 +49,12 @@ dsh --profile web
 
 这是 [DSH 官方支持的 GitHub 安装方式](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md#installing-from-github-the-build-script-catch)。DSH 会下载源码、安装包并加载其 `dsh.bundle` 配置；本项目入口是可直接运行的 `.mjs`，不需要编译。仓库名是 `dsh-mcp-strong-and-skills`，安装后的包名是 **`dsh-strong-skills`**。
 
-使用其他 profile 时，将以上三条命令中的 `web` 一起替换为实际名称。插件安装在 profile 中，不需要在每个代码项目里重复安装。
+使用其他 profile 时，将以上三条命令中的 `web` 一起替换为实际名称。插件安装在 profile 中，不需要在每个代码项目里重复安装。从旧版升级时，重新执行 GitHub 安装命令并重启相同 profile。
 
-从旧版升级时，重新执行上面的 GitHub 安装命令，再重启相同 profile，即可拉取当前分支的更新。v0.2 新增独立设置页与扩展工具；完整变化见[更新记录](CHANGELOG.md)。
-
-需要固定代码版本时，可在仓库来源后追加 `#提交SHA`，例如安装已发布的初始代码提交：
+需要固定版本时，可在仓库来源后追加发布标签或提交 SHA：
 
 ```sh
-dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#ebbe74359123ddf4c6cf6559a31abea2674eaa64
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#v0.3.0
 ```
 
 卸载时使用包名，然后重启对应 profile：
@@ -82,7 +81,7 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
-安装命令会修改所选 DSH profile。原生模式会在每次调用时解析 **DSH 当前会话的工作目录**，适合多项目使用与目录切换。
+原生模式会在每次调用时解析 **DSH 当前会话的工作目录**，适合多项目使用与目录切换。
 
 若想先用临时覆盖配置试用，在仓库目录执行：
 
@@ -93,56 +92,63 @@ dsh --profile web --patch /absolute/path/to/strong.native.patch.yml
 
 将 `/absolute/path/to/…` 替换为本机绝对路径；Windows 可用 `C:/path/to/…`。生成配置只创建本地 patch，不改 DSH 用户配置。已安装原生插件时，不要再叠加同一原生 patch。原生模式中的 `--root` 仅验证目录，不固定会话目录。
 
-## 插件设置与增强思考
+## 插件设置
 
 原生插件启用后，打开 **设置 → Strong Skills 编程增强**（英文界面显示 Strong Skills）。也可从 **插件 → dsh-strong-skills** 查看同一配置面板。更改通过 DSH 的 ConfigForms 保存至当前 profile，并在下一次请求/工具调用时读取；不使用浏览器本地存储代替宿主设置。表单保留只读、保存中、写入被拒绝和连接失败状态。
 
-**v0.2.1 修复了入口被隐藏的问题：** 浏览器客户端加载后，独立设置入口立即注册；不再等待宿主设置表单才显示。表单暂不可用时，页面显示检查提示，恢复后自动显示控件。整个原生插件未安装、被停用或客户端加载失败时，仍需先恢复插件加载。
+独立设置入口在浏览器客户端加载后立即注册，不等待宿主设置表单就绪。表单暂不可用时显示诊断提示，恢复后自动显示控件。
 
-![真实 DSH rc.3 中的 Strong Skills 独立设置页](docs/assets/settings.png)
-
-上图为 0.2.2previre 在隔离的真实 DSH rc.3 测试实例中的设置页，界面继承宿主主题；两个新模式默认关闭。已验证开启、刷新保持、增强思考关闭时暂停与恢复默认。
+![真实 DSH 中的 Strong Skills 独立设置页](docs/assets/settings.png)
 
 ### 桌面端没有看到设置入口
 
-桌面应用通常使用 **desktop profile**，终端示例中的 **web profile** 是另一个配置。安装到 web 不会替桌面应用安装插件。请在桌面侧栏的「插件」页面，确认 `dsh-strong-skills` 已安装并启用，然后通过「添加插件」重新安装当前来源，以更新到 v0.2.1 或之后版本：
+桌面应用通常使用 **desktop profile**，终端示例中的 **web profile** 是另一个配置。安装到 web 不会替桌面应用安装插件。请在桌面侧栏的「插件」页面，确认 `dsh-strong-skills` 已安装并启用，然后通过「添加插件」重新安装当前来源：
 
 ```text
 github:wemebabo57-a11y/dsh-mcp-strong-and-skills#main
 ```
 
-安装完成后，完全退出并重新打开桌面应用，再打开「设置」，查找「Strong Skills 编程增强」。Desktop profile 由 Electron 应用管理，请从桌面端安装/更新，不要把 web profile 的 CLI 命令当作桌面安装命令。仅通过外部 MCP 客户端接入时，使用的是独立服务，不会给 DSH 桌面程序安装原生设置页。
-
-### GitHub 显示旧 CI 失败
-
-`b45707c` 的历史 CI #5 因 Windows LF/CRLF 换行比较失败；`f771abf` 已修复。GitHub 保留旧运行记录和旧通知，重新运行旧提交仍会检查旧代码。请查看 [main 的最新 CI](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml?query=branch%3Amain)，而不是以历史通知判断当前版本。
+安装完成后，完全退出并重新打开桌面应用，再打开「设置」，查找「Strong Skills 编程增强」。Desktop profile 由 Electron 应用管理，请从桌面端安装/更新。仅通过外部 MCP 客户端接入时，使用的是独立服务，不会给 DSH 桌面程序安装原生设置页。
 
 | 设置 | 默认值 | 效果 |
 | --- | --- | --- |
-| 增强思考 | 开启 | 所有模型获得规划、契约核对、失败边界检查与有依据的验证指导 |
-| Claude 模式 | 关闭 | 所有模型可用；为生成的前端提供简洁、温暖的设计方向，并引导目标、证据与验证驱动的任务处理 |
-| we need to 思维 | 关闭 | 仅当前模型名称含 `deepseek` 或「深度求索」时，追加共同目标、所需证据、最小行动与验证的引导 |
-| 思考等级 | 均衡 | 深度模式增加一次有上限的反例检查，避免无限自审 |
+| 增强思考 | 开启 | 所有模型获得契约核对、依赖排序、最小完整改动、自审与按证据验证指导 |
+| Claude 模式 | 关闭 | 所有模型可用；为前端任务提供简洁、温暖的设计方向；增强思考开启时再提供目标、证据与验证驱动的任务指导 |
+| we need to 思维 | 关闭 | **所有模型生效，且独立于增强思考**：先写下 `We need to …` 目标，再按目标、事实、证据、行动、验证与风险展开 |
+| 无限 token 模式 | 关闭 | **所有模型生效，且独立于增强思考**：取消本插件输出与读取预算，开放 4 个工具与最多 8 个技能正文，要求完整规划、实现与验证 |
+| 思考等级 | 均衡 | 深度模式增加一次有上限的反例检查，避免无限自审；无限模式自动按深度增强处理 |
 | 澄清频率 | 多问一些 | 缺少会影响实现的关键信息时，合并询问 1–3 个问题；简单任务继续执行 |
 | 模型策略 | 自动 | 识别 DeepSeek API 别名及明确支持的版本名称使用专用策略；其他模型使用完整通用增强 |
-| 工具集 | 扩展 | 4 个入口；精简模式保留 `strong_skill` 与 `strong_context` |
-| 资源档位 | 均衡 | 控制扫描与输出上限；高级限制可单独覆盖 |
+| 工具集 | 扩展 | 4 个入口；精简模式保留 `strong_skill` 与 `strong_context`；无限模式强制 4 个入口 |
+| 资源档位 | 均衡 | 控制普通模式的扫描与输出上限；无限模式覆盖为最大范围 |
 
-**关闭“增强思考”会移除插件额外的规划、自审、模型专用指导与澄清策略**，同时暂停 Claude 模式的任务处理指导与 we need to 思维。Claude 模式的前端设计偏好、基础技能和工具仍可使用。插件的增强开关不改写服务商原生的 thinking / reasoning effort 参数；实际模型与 API 推理强度仍由 DSH 的模型设置决定。
+**关闭“增强思考”会移除插件额外的通用规划、自审、模型专用指导与澄清策略**，同时暂停 Claude 模式的任务处理指导。Claude 模式的前端设计偏好仍保留；**we need to 思维与无限 token 模式继续工作**。插件的增强开关不改写服务商原生的 thinking / reasoning effort 参数；实际模型与 API 推理强度仍由 DSH 的模型设置决定。
 
-### 两个可选模式
+## 三种增强模式
 
-**Claude 模式**面向所有模型。做前端任务时，参考清晰的信息层级、充足留白、温暖中性色与克制的强调色，兼顾真实内容、交互状态和可访问性；已有品牌及用户指定风格优先。任务处理方面，先明确目标与限制，再根据证据分解行动、检查结果并简洁汇报。这是公开可观察的工作方式与视觉偏好引导，不切换到 Claude，也不声称复现 Claude 的内部推理。
+### Claude 模式
 
-**we need to 思维**采用简短示例引导共同目标与行动，例如从「我们需要交付什么、还缺什么证据」自然过渡到最小改动与验证。它不规定思考必须以 `we need to` 开头，不禁止 `let me`，也不要求展示思维链。是否有效取决于具体模型与任务，尚无基准结果支持固定的能力提升幅度。
+面向所有模型。做前端任务时，参考清晰的信息层级、充足留白、温暖中性色与克制的强调色，兼顾真实内容、交互状态和可访问性；已有品牌及用户指定风格优先。任务处理方面，先明确目标与限制，再根据证据分解行动、检查结果并简洁汇报。这是公开可观察的工作方式与视觉偏好引导，不切换到 Claude，也不声称复现 Claude 的内部推理。
 
-此模式只在开关与增强思考均开启，且**当前步骤捕获的模型名称含 `deepseek`（不区分大小写）或「深度求索」**时生效，例如 `deepseek-v4-pro`、`deepseek-ai/DeepSeek-V4.1-Flash-1017` 或 `vendor/DeepSeek-R1`。原生热修版在宿主组装完成后读取 `variables.model`。只匹配 provider 名称、手选 DeepSeek 策略或缺少模型名称，都不会触发；切换为其他模型后，下一次组装提示时自动移除。独立 MCP 服务没有 DSH 当前步骤模型信息，因此不会仅凭策略预设启用该引导。
+### we need to 思维
 
-两项设置默认关闭，旧配置升级后保持原有行为。开启时只追加短指导，不预载额外技能正文、不增加工具入口，也不发起后台模型请求。
+**修复后的行为：只检查这个开关本身。** 打开后，无论当前是 DeepSeek、Claude、GPT、自定义网关还是缺少模型名称，也不论增强思考是否开启，下一次提示词组装都会加入协作目标引导。
 
-通用增强对任何模型开放，不以 DeepSeek 为使用条件。Pro 专用策略侧重依赖关系、架构取舍与兼容性；Flash 专用策略侧重符号/诊断定位、小步验证和有依据的失败恢复。专用策略会遵循当前可用工具集，不引用已关闭的工具。
+引导要求模型先在心里写下 **“We need to …”**，用一句话说清要交付的可观察结果；随后按 **目标 → 已知事实与假设 → 需要的最小证据 → 行动 → 验证 → 风险** 展开。复杂任务按依赖排序，简单任务可一句话确认目标后直接执行。思考语言跟随用户，不要求逐字使用英文；需要时可以在答复中给出简短思路摘要，但不要编造或泄露内部推理细节。
 
-官方 API 的 `deepseek-v4-pro` 与 `deepseek-flash` 是滚动别名；截至 2026-10-25，后者对应 V4.1 Flash 1017。设置中的 `deepseek-v4.1-flash-1017` 是本插件的策略标识，**不会作为不存在的官方 API 模型名发送**，也不能锁定远端权重。自托管或代理使用其他模型标识时，可手动选择策略。详见[模型策略说明](docs/model-strategies.md)与[官方模型文档](https://api-docs.deepseek.com/quick_start/pricing/)。
+这是**提示词层面的行为引导**，会明确要求模型建立目标与证据链，但不能改写模型权重，也不能保证每种模型都逐字展示或遵守内部思维格式。它不预载技能正文、不增加工具入口、不发起后台模型请求。
+
+### 无限 token 模式
+
+面向所有模型的“最大完整性”档位。开启后：
+
+- 本插件不再截断工具结果：`strong_context` 的读取与检索结果按完整内容返回，`strong_code` / `strong_review` 使用更高的文件与条目预算；
+- 工作区扫描最多 **5,000 个文件**、单文件 **262,144 字节**，普通读取上限提升到 **5,000 行**，单行不再按 1,200 字符截断；
+- 一次最多可读取 **8 个完整技能正文**，并强制显示全部 **4 个工具入口**，即使 profile 选择了精简工具集；
+- 提示词要求完整列出目标、约束、验收矩阵与至少两个方案，执行尽可能全面的验证，并给出完整代码、diff、证据、风险与未覆盖项；
+- 增强思考开启时自动按 `deep` 处理，额外做有界反例检查。
+
+**边界：**“无限”指本插件不再主动节省或截断，不是服务商真的提供无限上下文，也不改变模型的上下文窗口、API 计费或宿主读取权限。普通输出仍受宿主与模型自身限制；超大仓库仍可能因宿主限制失败。建议只在确实需要完整阅读、系统重构或深度审查时临时开启。
 
 ## 能力一览
 
@@ -159,7 +165,7 @@ github:wemebabo57-a11y/dsh-mcp-strong-and-skills#main
 | `performance` | 测量瓶颈，以前后证据评估优化 |
 | `research` | 查阅官方文档，核对版本与技术适配 |
 
-`strong_skill` 无参数时只列目录；`id` 精确读取技能，`query` 通过本地关键词匹配，默认只读最相关的一个。显式传 `limit: 2` 可读取两个，仍受 profile 限制。无匹配时返回简短目录，交由模型选择；已加载的正文保留在会话历史中。
+`strong_skill` 无参数时只列目录；`id` 精确读取技能，`query` 通过本地关键词匹配，默认只读最相关的一个。普通模式显式传 `limit: 2` 可读取两个；无限模式可读取最多 8 个。无匹配时返回简短目录，交由模型选择；已加载的正文保留在会话历史中。
 
 前端技能优先尊重用户要求与现有品牌。新界面默认避免深蓝底、蓝紫渐变、无意义光晕和重复的大标题卡片，鼓励根据内容选择视觉方向。这些是指令与启发式建议，不能保证模型每次都遵守。
 
@@ -229,43 +235,45 @@ dsh --profile web --patch /absolute/path/to/strong.mcp.patch.yml
 
 服务只读取启动时指定的项目根目录；切换项目需重启服务。stdout 专用于 JSON-RPC，诊断写入 stderr。支持 tools、resources 与 `strong://skills/<id>` 技能资源；支持协商 `2025-11-25`、`2025-06-18`、`2025-03-26`、`2024-11-05` 协议版本。
 
-独立 MCP 服务不继承 DSH 的设置页状态。可用启动参数选择增强方式，例如关闭额外思考并使用精简工具，或为自定义路由指定 Flash 策略：
+独立 MCP 服务不继承 DSH 的设置页状态。可用启动参数选择增强方式：
 
 ```sh
 node bin/strong.mjs serve --root /absolute/path/to/project --thinking off --tools compact
 node bin/strong.mjs serve --root /absolute/path/to/project --model deepseek-v4.1-flash-1017 --thinking-level deep
-node bin/strong.mjs serve --root /absolute/path/to/project --claude-mode on
+node bin/strong.mjs serve --root /absolute/path/to/project --claude-mode on --we-need-to on
+node bin/strong.mjs serve --root /absolute/path/to/project --unlimited on
 ```
 
-生成原生配置时也可使用 `--claude-mode on` 与 `--we-need-to on`；后者仍需原生宿主在运行时提供匹配的当前模型名称，`--model` 只选择工作策略。
+生成原生或 MCP 配置时均可使用 `--claude-mode on`、`--we-need-to on` 与 `--unlimited on`。we need to 现在不依赖当前模型名称；`--model` 只选择 Pro/Flash 工作策略。
 
 ## 上下文预算
 
-默认扩展工具与均衡增强约 **1,104 tokens**；切换为精简工具并关闭增强思考可回到约 **606 tokens**。所有模式都**不预载技能正文**，不会后台调用模型或运行隐藏的多轮评审。数字为字符启发式估算，不是 DeepSeek tokenizer 或账单测量，也未计入宿主上下文与 MCP 包装，可自行复算：
+默认扩展工具与均衡增强约 **1,270 tokens**；切换为精简工具并关闭增强思考可回到约 **643 tokens**。所有普通模式都**不预载技能正文**，不会后台调用模型或运行隐藏的多轮评审。数字为字符启发式估算，不是 DeepSeek tokenizer 或账单测量，也未计入宿主上下文与 MCP 包装，可自行复算：
 
 ```sh
 node bin/strong.mjs budget
 node bin/strong.mjs budget --thinking off --tools compact
 node bin/strong.mjs budget --claude-mode on --we-need-to on
+node bin/strong.mjs budget --unlimited on
 ```
 
-新模式默认关闭，不增加上述默认预算。在增强思考开启时，Claude 模式追加约 **173 tokens**；匹配到 DeepSeek 当前模型后，we need to 思维再追加约 **99 tokens**，同时生效合计约 **272 tokens**。这是相对同一模型、同一配置的增量；例如当前模型为 `deepseek-flash` 时，均衡扩展配置由约 1,186 增至 1,458 tokens。CLI `budget` 没有当前模型上下文时会在 `modes.weNeedTo` 中显示未启用原因，不会仅凭预设把它计为生效。
+在默认配置上，Claude 模式追加约 **173 tokens**，we need to 思维追加约 **157 tokens**，两者同时生效合计约 **330 tokens**（总计约 1,600）。这是相对同一模型、同一配置的增量；例如 `deepseek-flash` 的均衡扩展配置由约 1,358 增至 1,689 tokens。无限模式默认约 1,550 tokens；精简工具并关闭增强思考时约 1,172 tokens，但工具结果与读取范围不再截断。CLI `budget` 会显示 `maxResultChars: "unlimited"`、`maxFiles: 5000` 与 `maxSkillLoads: 8` 作为生效证据。
 
-| Profile | 单次结果字符上限 | 最多扫描文件 | 每次最多加载技能 |
+| Profile（普通模式） | 单次结果字符上限 | 最多扫描文件 | 每次最多加载技能 |
 | --- | ---: | ---: | ---: |
 | `lean` | 4,000 | 400 | 1 |
 | `balanced`（默认） | 6,000 | 800 | 2 |
 | `thorough` | 12,000 | 2,000 | 2 |
 
-表中上限是 **字符数**。默认检索只返回片段；过长结果保留合法 JSON 并标注截断，模型应缩小范围或按行读取。
+表中上限是 **字符数**。默认检索只返回片段；过长结果保留合法 JSON 并标注截断，模型应缩小范围或按行读取。无限模式绕过这些普通档位：输出不截断、最多 5,000 个文件、单文件 262,144 字节、读取最多 5,000 行、技能最多 8 个。
 
-原生插件配置还支持 `maxOutputChars`（2,000–20,000）、`maxFiles`（20–5,000）、`maxFileBytes`（1,024–262,144）、`maxSkillLoads`（1–2），均可在设置页的高级限制中修改。通过 `brandIntent` 描述既有品牌，或设置 `allowBrandColors: true`，可让样式检查尊重品牌配色。
+原生插件配置还支持 `maxOutputChars`（2,000–20,000）、`maxFiles`（20–5,000）、`maxFileBytes`（1,024–262,144）、`maxSkillLoads`（1–2），均可在设置页的高级限制中修改；开启无限模式后运行时自动覆盖为最大值，技能上限放宽到 8。通过 `brandIntent` 描述既有品牌，或设置 `allowBrandColors: true`，可让样式检查尊重品牌配色。
 
 ## 工作方式与边界
 
 ```mermaid
 flowchart LR
-    Host[DSH / MCP 客户端] --> Gateway[通用增强 + 可选 DeepSeek 策略]
+    Host[DSH / MCP 客户端] --> Gateway[通用增强 + 可选模式 + 无限策略]
     Gateway --> Skills[strong_skill · 按需加载技能]
     Gateway --> Context[strong_context · 限量读取仓库]
     Gateway --> Code[strong_code / strong_review]
@@ -275,7 +283,7 @@ flowchart LR
 ```
 
 - 仓库工具只读，不执行项目脚本或任意命令。`checks` 返回的建议由模型结合任务与宿主权限决定是否执行。
-- 默认排除生成目录、二进制、大文件和常见敏感路径，拒绝目录穿越与符号链接。Git 可用时遵循其 ignore 规则，否则明确说明仅使用内置排除规则。普通源码中的敏感信息仍可能被读取。
+- 默认排除生成目录、二进制、大文件和常见敏感路径，拒绝目录穿越与符号链接。Git 可用时遵循其 ignore 规则，否则明确说明仅使用内置排除规则。普通源码中的敏感信息仍可能被读取；无限模式只放宽读取范围，不取消安全排除。
 - `diff` 不含暂存区或未跟踪文件；不支持的 Git 环境会返回原因。`style` 是启发式建议，不是 CSS 解析器或品牌判定器。
 - 插件不会安装外部 MCP 服务、改变模型权限或替代 DSH 的安全边界。
 
@@ -292,7 +300,7 @@ npm test
 npm run budget
 ```
 
-测试覆盖中英文技能路由、原生宿主契约模拟、真实 stdio 子进程往返、路径边界、取消与输出上限。本地检查不等于真实 DSH 集成测试或模型能力评测。DSH 契约参考版本、上游链接与待验证项目见[兼容性记录](docs/compatibility.md)。
+测试覆盖中英文技能路由、原生宿主契约模拟、真实 stdio 子进程往返、路径边界、取消、输出上限、无限模式覆盖与设置/CLI 往返。本地检查不等于真实 DSH 集成测试或模型能力评测。DSH 契约参考版本、上游链接与待验证项目见[兼容性记录](docs/compatibility.md)。
 
 修改 `client/*.mjs` 后运行 `npm run build:ui` 更新已提交的浏览器分发文件；静态检查会拒绝过期 bundle。无需额外构建依赖。运行 `npm pack` 可生成本地分发 tarball，打包前会自动执行静态检查和测试；安装时无需构建。
 

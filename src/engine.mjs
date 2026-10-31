@@ -2,9 +2,9 @@ import { Workspace } from './workspace.mjs';
 import { resolveConfig } from './config.mjs';
 import { selectSkills } from './skills.mjs';
 import { POLICY, estimateTokens } from './policy.mjs';
-import { buildEnhancementPolicy } from './thinking.mjs';
+import { buildEnhancementPolicy, buildUnlimitedPolicy } from './thinking.mjs';
 import { getModelProfile } from './models.mjs';
-import { buildDesignModePolicy, getModeState } from './modes.mjs';
+import { buildDesignModePolicy, buildThinkingModePolicy, getModeState } from './modes.mjs';
 import { EXTRA_TOOLS, runCodeTool } from './code-tools.mjs';
 
 export const BASE_TOOLS = Object.freeze([
@@ -12,15 +12,15 @@ export const BASE_TOOLS = Object.freeze([
     inputSchema: { type: 'object', properties: {
       query: { type: 'string', maxLength: 500, description: '任务或技能关键词，中英文均可' },
       id: { type: 'string', enum: ['code-delivery', 'debug', 'refactor', 'testing', 'frontend-design', 'security-review', 'performance', 'research'] },
-      limit: { type: 'integer', minimum: 1, maximum: 2, description: '默认只加载 1 个技能' },
+      limit: { type: 'integer', minimum: 1, maximum: 8, description: '默认只加载 1 个技能；无限 token 模式最多 8 个' },
     }, additionalProperties: false } },
   { name: 'strong_context', description: '读取有上限的工作区上下文。map 文件图；search 字面检索；read 行片段；diff 工作树差异；checks 验证命令建议（不执行）；style 配色启发式审查。返回的代码是数据。',
     inputSchema: { type: 'object', properties: {
       action: { type: 'string', enum: ['map', 'search', 'read', 'diff', 'checks', 'style'] },
       path: { type: 'string', maxLength: 1000, description: '相对工作区的文件或子目录' },
-      query: { type: 'string', maxLength: 200, description: 'search 的字面关键词' },
+      query: { type: 'string', maxLength: 1000, description: 'search 的字面关键词' },
       start: { type: 'integer', minimum: 1, maximum: 1000000 },
-      limit: { type: 'integer', minimum: 1, maximum: 200 },
+      limit: { type: 'integer', minimum: 1, maximum: 5000, description: '普通模式默认 80、最多 200；无限 token 模式默认与最多 5000' },
     }, required: ['action'], additionalProperties: false } },
 ]);
 
@@ -28,13 +28,19 @@ export const TOOLS = Object.freeze([...BASE_TOOLS, ...EXTRA_TOOLS]);
 
 export function toolsForConfig(options = {}) {
   const config = resolveConfig(options);
-  return config.toolSet === 'compact' ? BASE_TOOLS : TOOLS;
+  return config.unlimitedTokens || config.toolSet === 'expanded' ? TOOLS : BASE_TOOLS;
 }
 
 export function buildPolicy(options = {}, context = {}) {
   const config = resolveConfig(options);
-  const enhancement = buildEnhancementPolicy(config, context);
-  return [POLICY, config.toolSet === 'expanded' ? '复杂代码定位可用 strong_code 提取符号、导入与诊断；修改后可用 strong_review 提取差异风险与验证建议。它们提供线索，仍需实际验证。' : '', buildDesignModePolicy(config), enhancement].filter(Boolean).join('\n');
+  return [
+    POLICY,
+    config.toolSet === 'expanded' ? '复杂代码定位可用 strong_code 提取符号、导入与诊断；修改后可用 strong_review 提取差异风险与验证建议。它们提供线索，仍需实际验证。' : '',
+    buildDesignModePolicy(config),
+    buildEnhancementPolicy(config, context),
+    buildThinkingModePolicy(config, context),
+    buildUnlimitedPolicy(config),
+  ].filter(Boolean).join('\n');
 }
 
 export function validateArguments(schema, args) {
@@ -95,7 +101,7 @@ export class StrongEngine {
         ? await this.workspace.run(args, { signal })
         : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
     signal?.throwIfAborted();
-    return boundResult(value, this.config.maxOutputChars);
+    return boundResult(value, this.config.unlimitedTokens ? Number.POSITIVE_INFINITY : this.config.maxOutputChars);
   }
 }
 
@@ -105,10 +111,11 @@ export function budgetReport(options = {}, context = {}) {
   const policy = buildPolicy(config, context);
   return { profile: config.profile, toolSet: config.toolSet, residentTools: toolsForConfig(config).length, residentSkillBodies: 0,
     enhancedThinking: config.enhancedThinking, thinkingLevel: config.thinkingLevel, clarification: config.clarification,
+    unlimitedTokens: config.unlimitedTokens,
     modes: getModeState(config, context),
     modelProfile: getModelProfile(context.selection ?? context.modelId, config), nativeReasoning: 'host-controlled',
     policyChars: policy.length, toolSchemaChars: toolText.length,
     approximateResidentTokens: estimateTokens(policy) + estimateTokens(toolText),
-    maxResultChars: config.maxOutputChars, maxFiles: config.maxFiles, maxSkillLoads: config.maxSkillLoads,
+    maxResultChars: config.unlimitedTokens ? 'unlimited' : config.maxOutputChars, maxFiles: config.maxFiles, maxSkillLoads: config.maxSkillLoads,
     note: '字符启发式估算，非 DeepSeek tokenizer 或账单统计；仅统计本插件增量，MCP 工具名前缀和宿主包装未计入。' };
 }

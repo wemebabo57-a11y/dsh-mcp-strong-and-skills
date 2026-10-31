@@ -65,6 +65,7 @@ function recordSkip(stats, reason, count = 1) {
 // instead of slicing serialized JSON, which can break Unicode and JSON syntax.
 function fitOutput(result, budget) {
   result.truncated = Boolean(result.truncated);
+  if (budget === Number.POSITIVE_INFINITY) return result;
   let serialized = JSON.stringify(result);
   const arrays = ['matches', 'warnings', 'files', 'lines', 'packages', 'configs'];
   while (serialized.length > budget) {
@@ -199,9 +200,11 @@ export class Workspace {
   constructor(root, config = {}) {
     if (typeof root !== 'string' || !root) throw new WorkspaceError('INVALID_ROOT', 'A workspace root is required.');
     this.root = path.resolve(root);
-    this.maxFiles = bounded(config.maxFiles, 800, 1, 5000);
-    this.maxFileBytes = bounded(config.maxFileBytes, 262144, 1024, 262144);
-    this.maxOutputChars = bounded(config.maxOutputChars, DEFAULT_OUTPUT, 1000, 20000);
+    const unlimited = config.unlimitedTokens === true;
+    this.unlimitedTokens = unlimited;
+    this.maxFiles = unlimited ? 5000 : bounded(config.maxFiles, 800, 1, 5000);
+    this.maxFileBytes = unlimited ? 262144 : bounded(config.maxFileBytes, 262144, 1024, 262144);
+    this.maxOutputChars = unlimited ? Number.POSITIVE_INFINITY : bounded(config.maxOutputChars, DEFAULT_OUTPUT, 1000, 20000);
     this.brandIntent = typeof config.brandIntent === 'string' ? clip(config.brandIntent, 300) : '';
     this.allowBrandColors = config.allowBrandColors === true;
   }
@@ -361,7 +364,7 @@ export class Workspace {
     if (!args || typeof args !== 'object' || !ACTIONS.has(args.action)) throw new WorkspaceError('INVALID_ACTION', 'Choose map, search, read, diff, checks, or style.');
     const root = await this._root(signal);
     const selected = await this._resolve(root, args.path ?? '.', { signal, allowMissing: args.action === 'diff' });
-    const limit = bounded(args.limit, 80, 1, 200);
+    const limit = this.unlimitedTokens ? bounded(args.limit, 5000, 1, 5000) : bounded(args.limit, 80, 1, 200);
     const start = bounded(args.start, 1, 1, Number.MAX_SAFE_INTEGER);
     const stats = { scannedFiles: 0, skipped: {}, scanLimitReached: false };
     const result = { action: args.action, path: selected.relative || '.', ...stats };
@@ -419,8 +422,8 @@ export class Workspace {
         const lines = content.split(/\r?\n/);
         result.totalLines = lines.length;
         for (let index = start - 1; index < Math.min(lines.length, start - 1 + limit); index++) {
-          result.lines.push({ line: index + 1, text: clip(lines[index], 1200) });
-          if (lines[index].length > 1200) truncated = true;
+          result.lines.push({ line: index + 1, text: this.unlimitedTokens ? lines[index] : clip(lines[index], 1200) });
+          if (!this.unlimitedTokens && lines[index].length > 1200) truncated = true;
         }
         truncated ||= start - 1 + limit < lines.length;
       }
@@ -453,7 +456,9 @@ export class Workspace {
             try {
               const parsed = JSON.parse(content);
               const scripts = parsed?.scripts && typeof parsed.scripts === 'object' && !Array.isArray(parsed.scripts) ? parsed.scripts : {};
-              result.packages.push({ path: name, scripts: Object.fromEntries(Object.keys(scripts).sort().filter((key) => typeof scripts[key] === 'string').slice(0, 40).map((key) => [clip(key, 100), clip(scripts[key], 300)])) });
+              const names = Object.keys(scripts).sort().filter((key) => typeof scripts[key] === 'string');
+              const selectedNames = this.unlimitedTokens ? names : names.slice(0, 40);
+              result.packages.push({ path: name, scripts: Object.fromEntries(selectedNames.map((key) => [clip(key, 100), this.unlimitedTokens ? scripts[key] : clip(scripts[key], 300)])) });
             } catch { recordSkip(stats, 'invalidJson'); }
           } else if (configPattern.test(basename) || /^\.github\/workflows\/[^/]+\.ya?ml$/.test(name)) {
             result.configs.push(name);
@@ -491,9 +496,9 @@ export class Workspace {
             } else {
               const column = line.toLowerCase().indexOf(query);
               if (column !== -1) {
-                const offset = Math.max(0, column - 200);
-                entries.push({ path: name, line: index + 1, column: column + 1, text: (offset ? '…' : '') + clip(line.slice(offset), 700) });
-                if (offset || line.length > 700) truncated = true;
+                const offset = this.unlimitedTokens ? 0 : Math.max(0, column - 200);
+                entries.push({ path: name, line: index + 1, column: column + 1, text: (offset ? '…' : '') + (this.unlimitedTokens ? line : clip(line.slice(offset), 700)) });
+                if (!this.unlimitedTokens && (offset || line.length > 700)) truncated = true;
               }
               if (entries.length >= limit) { truncated = true; break outer; }
             }

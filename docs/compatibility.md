@@ -1,8 +1,19 @@
 # DeepSeek Harness compatibility
 
-Initial contract review on 2026-10-24; updated for v0.2 on 2026-10-25 against official upstream source and an isolated real DSH 0.2.1-rc.3 Web instance.
+Initial contract review on 2026-10-24; updated for v0.3.0 on 2026-10-31 against official upstream source and real DSH 0.2.1-rc.5 components (rc.3-compatible contracts).
 
-## 0.2.2-previre.1 prompt-injection correction — 2026-10-26
+## 0.3.0 all-model guidance and unlimited mode — 2026-10-31
+
+Version 0.3.0 changes the optional we-need-to mode from a model-gated hint into an explicitly selected, all-model behavioral instruction. In 0.2.2 it required both `enhancedThinking` and a current model name containing `deepseek` or 「深度求索」; every other model, and every session with enhanced thinking off, silently ignored the checked switch. That gate was the reported “勾选后没用” defect. `getModeState()` now activates the guidance whenever `weNeedToThinking === true`; model selection is diagnostic only. The policy explicitly asks the model to write “We need to …” as an internal goal, then work through goal, known facts/assumptions, minimum evidence, action, verification, and risk, while allowing the user's language and a short public rationale. This is still prompt guidance: it does not change model weights or guarantee a visible chain of thought.
+
+`unlimitedTokens` is a new volatile boolean, default false, using the same ConfigForms/native/CLI/MCP path. It forces the expanded four-tool surface, disables plugin output truncation, expands workspace reads to 5,000 files / 262,144 bytes per file / 5,000 lines, permits up to eight complete skill bodies, and raises `strong_code`/`strong_review` scan budgets. It is independent of `enhancedThinking`; when enhanced thinking is on, it forces the deep level. “Unlimited” means this plugin stops imposing its own savings budgets; it does not create provider context, bypass host permissions, or change billing.
+
+Verification: **116 automated tests** plus **9 real-host component checks** in `scripts/check-host.mjs`. The host script imports published Cordis, Agent, Scope and SystemPrompt implementations, calls the real `assembleContextFor()` and `installModelSelection()`, and checks the final rendered prompt, current model changes, cross-Agent isolation, live switches, all-model guidance, enhanced-thinking-off behavior, unlimited policy injection, and complete user-prompt precedence. It uses no credentials, user profile, server or model inference. It verifies injection and configuration behavior, not model response quality.
+
+## 0.2.2-previre.1 prompt-injection correction — 2026-10-26（历史）
+
+> This section records the previous hotfix. Its DeepSeek-only mode gate was removed in 0.3.0; the current all-model behavior is described above.
+
 
 The original native callback incorrectly expected `context.modelSelection`. The published rc.3 `assembleContextFor()` supplies only Agent, scope, and optional signal. Its real `installModelSelection()` captures the current route and publishes `variables.model` / `variables.provider` after its assembly waterfall delegates. As a result, the original mode could be saved and enabled but absent from the final policy. This was reproduced with the user's exact model name, `deepseek-ai/DeepSeek-V4.1-Flash-1017`; the desktop app's packaged rc.3 Agent code was also inspected read-only and uses the same contract. Earlier UI and hand-built context fixtures did not cover this defect.
 
@@ -19,7 +30,10 @@ node scripts/check-host.mjs --runtime .tmp/host-contract
 
 CI runs the same check in a temporary directory independently of the four existing OS/Node checks. It fails when host dependencies are absent rather than substituting an invented context fixture.
 
-## 0.2.2previre mode boundary
+## 0.2.2previre mode boundary（历史）
+
+> Superseded by 0.3.0. The gate below no longer exists; `weNeedToThinking` now applies to every model and does not depend on enhanced thinking.
+
 
 The release display name is `0.2.2previre`; its package version is the SemVer prerelease `0.2.2-previre`. The two optional boolean fields `claudeMode` and `weNeedToThinking` default to false and reuse the existing volatile Config and native settings form. No new tool or runtime dependency is required.
 

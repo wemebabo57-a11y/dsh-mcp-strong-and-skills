@@ -118,9 +118,9 @@ test('section provider follows saved switches with an explicit model-selection f
   state.weNeedToThinking = true;
   assert.equal(render({ modelSelection: first }), buildPolicy(state, { selection: first }));
   assert.equal(render({ modelSelection: other }), buildPolicy(state, { selection: other }));
-  assert.notEqual(render({ modelSelection: first }), render({ modelSelection: other }));
+  assert.match(render({ modelSelection: other }), /协作目标引导/);
   state.enhancedThinking = false;
-  assert.equal(render({ modelSelection: first }), buildPolicy({ enhancedThinking: false, claudeMode: true }));
+  assert.equal(render({ modelSelection: first }), buildPolicy({ enhancedThinking: false, claudeMode: true, weNeedToThinking: true }));
   state.claudeMode = false;
   state.weNeedToThinking = false;
   assert.equal(render({ modelSelection: first }), buildPolicy({ enhancedThinking: false }));
@@ -151,6 +151,21 @@ test('live compact tools disappear from discovery and reject execution until exp
   assert.deepEqual(await code.execute(args, execution), first);
 });
 
+test('unlimited native setting overrides compact discovery and stays live', async t => {
+  const root = await temporaryWorkspace(t, 'unlimited native');
+  const state = { unlimitedTokens: false };
+  const { ctx, sections, visibleNames } = host(undefined, root);
+  apply(ctx, { toolSet: 'compact', unlimitedTokens: { get: () => state.unlimitedTokens } });
+  assert.deepEqual(visibleNames(), BASE_TOOLS.map(tool => tool.name));
+  assert.doesNotMatch(sections[0].text(), /无限 token 模式/);
+  state.unlimitedTokens = true;
+  assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
+  assert.match(sections[0].text(), /无限 token 模式/);
+  const schema = TOOLS.find(tool => tool.name === 'strong_context').inputSchema;
+  assert.equal(schema.properties.limit.maximum, 5000);
+  assert.equal(TOOLS.find(tool => tool.name === 'strong_skill').inputSchema.properties.limit.maximum, 8);
+});
+
 test('native Standard Schema validates defaults and rejects invalid settings', async () => {
   const standard = Config['~standard'];
   assert.equal(standard.version, 1);
@@ -164,7 +179,8 @@ test('native Standard Schema validates defaults and rejects invalid settings', a
   assert.equal(config.clarification, 'more');
   assert.equal(config.modelPreset, 'auto');
   assert.equal(config.toolSet, 'expanded');
-  for (const invalid of [{ enhancedThinking: 'false' }, { claudeMode: 'true' }, { weNeedToThinking: 1 }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { maxFiles: 1 }]) {
+  assert.equal(config.unlimitedTokens, false);
+  for (const invalid of [{ unlimitedTokens: 'true' }, { enhancedThinking: 'false' }, { claudeMode: 'true' }, { weNeedToThinking: 1 }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { maxFiles: 1 }]) {
     const result = await standard.validate(invalid);
     assert.ok(result.issues?.length, JSON.stringify(invalid));
   }

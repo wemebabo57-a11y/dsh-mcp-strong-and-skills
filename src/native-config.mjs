@@ -8,17 +8,18 @@ export function createConfigSchema(z) {
     profile: choices(['lean', 'balanced', 'thorough'], 'balanced', '上下文预算档位'),
     enhancedThinking: z.boolean().default(true).description('增强思考：方案、边界检查与必要澄清').volatile(),
     claudeMode: z.boolean().default(false).description('Claude 模式：前端视觉参考与结构化解题；思考部分受增强思考总开关控制').volatile(),
-    weNeedToThinking: z.boolean().default(false).description('we need to 思维：仅名称含 DeepSeek 或深度求索的当前模型启用协作目标引导').volatile(),
+    weNeedToThinking: z.boolean().default(false).description('we need to 思维：所有模型可用，以“We need to …”目标、证据、行动与验证引导思考').volatile(),
+    unlimitedTokens: z.boolean().default(false).description('无限 token 模式：不截断输出，按最大范围读取上下文与技能，要求穷尽式规划与验证；消耗显著增加').volatile(),
     thinkingLevel: choices(['balanced', 'deep'], 'balanced', '增强程度；不改写模型 API reasoning effort'),
     clarification: choices(['auto', 'more', 'few'], 'more', '关键信息不明时的澄清偏好'),
     modelPreset: choices(['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'], 'auto', '模型指导预设；不切换实际模型'),
     toolSet: choices(['compact', 'expanded'], 'expanded', '工具集合：基础 2 个或扩展 4 个'),
     allowBrandColors: z.boolean().default(false).description('尊重指定品牌的蓝紫配色').volatile(),
     brandIntent: z.string().max(200).default('').description('已有品牌或用户配色要求').volatile(),
-    maxOutputChars: integer(2000, 20000, '单次结果字符上限；留空跟随预算档位'),
+    maxOutputChars: integer(2000, 20000, '单次结果字符上限；无限 token 模式下自动取最大值'),
     maxFiles: integer(20, 5000, '最多扫描文件；留空跟随预算档位'),
     maxFileBytes: integer(1024, 262144, '单个文件字节上限'),
-    maxSkillLoads: integer(1, 2, '单次最多加载技能；留空跟随预算档位'),
+    maxSkillLoads: integer(1, 2, '单次最多加载技能；无限 token 模式下自动放宽到 8'),
   });
 }
 

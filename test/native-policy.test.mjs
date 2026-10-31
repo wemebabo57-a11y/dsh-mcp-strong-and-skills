@@ -37,12 +37,12 @@ test('host post-assembly transformation reads live switches and captured variabl
   assert.equal(result.sections[0], other);
   assert.equal(result.variables, assembly.variables);
   assert.equal(result.tools, assembly.tools);
-  assert.doesNotMatch(own.text, /协作目标引导/, 'The section provider had no captured route yet');
+  assert.match(own.text, /协作目标引导/, 'The live switch works before a route is captured');
   state.weNeedToThinking = false;
   assert.doesNotMatch((await transform(undefined, context, async () => assembly)).sections[1].text, /协作目标引导/);
   state.weNeedToThinking = true;
   const unrelated = { ...assembly, variables: { provider: 'deepseek', model: 'other' } };
-  assert.doesNotMatch((await transform(undefined, context, async () => unrelated)).sections[1].text, /协作目标引导/);
+  assert.match((await transform(undefined, context, async () => unrelated)).sections[1].text, /协作目标引导/);
   const missing = { sections: [other], variables: assembly.variables };
   assert.equal(await transform(undefined, context, async () => missing), missing, 'A removed policy is never forcibly reinserted');
 });
