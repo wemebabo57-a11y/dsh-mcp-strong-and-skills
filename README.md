@@ -54,7 +54,7 @@ dsh --profile web
 需要固定版本时，可在仓库来源后追加发布标签或提交 SHA：
 
 ```sh
-dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#v0.3.0
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.3.0
 ```
 
 卸载时使用包名，然后重启对应 profile：
