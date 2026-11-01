@@ -1,0 +1,50 @@
+name: Publish 0.3.1 once
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-0.3.1.yml']
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: >-
+      github.event.head_commit.message == 'release: publish 0.3.1 from 5d2121832ecf'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      SOURCE_SHA: 5d2121832ecf5bd8ac9ea627efd6ef88750e5eb6
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the tested 0.3.1 source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 5d2121832ecf5bd8ac9ea627efd6ef88750e5eb6
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+      - name: Package the fixed source
+        run: |
+          test "$(node -p "require('./package.json').version")" = '0.3.1'
+          npm pack --ignore-scripts
+          sha256sum dsh-strong-skills-0.3.1.tgz > SHA256SUMS.txt
+      - name: Create draft, upload assets, then publish
+        run: |
+          if gh release view 0.3.1 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            target=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/0.3.1" --jq '.target_commitish')
+            test "$target" = "$SOURCE_SHA"
+          else
+            gh release create 0.3.1 --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" \
+              --title '0.3.1 — 项目知识库与持久项目设定' \
+              --notes-file docs/releases/0.3.1.md --draft
+          fi
+          gh release upload 0.3.1 dsh-strong-skills-0.3.1.tgz SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          names=$(gh release view 0.3.1 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | map(.name) | sort | join(",")')
+          test "$names" = 'SHA256SUMS.txt,dsh-strong-skills-0.3.1.tgz'
+          gh release edit 0.3.1 --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
