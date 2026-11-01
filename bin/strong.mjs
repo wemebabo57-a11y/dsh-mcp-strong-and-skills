@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpath, stat } from 'node:fs/promises';
+import { realpath, stat, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StrongEngine, budgetReport } from '../src/engine.mjs';
@@ -9,13 +9,14 @@ const HELP = `dsh-strong — DeepSeek Harness 编码增强
 
   serve   --root <项目目录> [--profile lean|balanced|thorough]   stdio MCP
   skill   [--id debug | --query "修复登录错误"] [--limit 1|2]   按需技能
-  inspect --root <项目目录> --action map|search|read|diff|checks|style
+  inspect --root <项目目录> --action map|search|read|diff|checks|style|knowledge|project
           [--path src] [--query keyword] [--start 1] [--limit 80]
   code    --root <项目目录> --action symbols|imports|diagnostics [--path src] [--text 报错]
   review  --root <项目目录> [--path src] [--limit 40]           差异与风险建议
   config  --mode native|mcp --root <项目目录> [--profile balanced]  输出 DSH patch
   budget  [--profile lean|balanced|thorough]                     上下文开销估算
 
+知识配置：--knowledge-file <JSON文件>（原生/MCP/inspect 均可使用）
 通用增强选项：--thinking on|off --thinking-level balanced|deep
               --clarification auto|more|few --model auto|deepseek-v4-pro|deepseek-v4.1-flash-1017|generic
               --tools compact|expanded --claude-mode on|off --we-need-to on|off --unlimited on|off
@@ -37,7 +38,7 @@ export function parseArgs(argv) {
 }
 
 function checkOptions(command, options) {
-  const common = ['profile', 'thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited'];
+  const common = ['profile', 'thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited', 'knowledge-file'];
   const allowed = {
     serve: ['root', ...common], skill: ['id', 'query', 'limit', ...common],
     inspect: ['root', 'action', 'path', 'query', 'start', 'limit', ...common],
@@ -73,6 +74,10 @@ export async function main(argv = process.argv.slice(2)) {
   checkOptions(command, options);
   if (['help', '--help', '-h'].includes(command)) { process.stdout.write(HELP + '\n'); return; }
   const config = optionsToConfig(options);
+  if (options['knowledge-file']) {
+    if ((await stat(options['knowledge-file'])).size > 262144) throw new Error('Knowledge configuration file is too large');
+    config.knowledgeConfig = await readFile(options['knowledge-file'], 'utf8');
+  }
   // Resolve/validate profile even for config generation.
   const budget = budgetReport(config);
   if (command === 'budget') { process.stdout.write(JSON.stringify(budget, null, 2) + '\n'); return; }
@@ -91,6 +96,7 @@ export async function main(argv = process.argv.slice(2)) {
     } else if (options.mode === 'mcp') {
       const args = [resolve(directory, 'bin/strong.mjs'), 'serve', '--root', root, '--profile', budget.profile];
       for (const key of ['thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited']) if (options[key] !== undefined) args.push(`--${key}`, options[key]);
+      if (options['knowledge-file']) args.push('--knowledge-file', resolve(options['knowledge-file']));
       process.stdout.write(`- insert:\n    - id: strong-skills-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: strong\n        transport: stdio\n        command: ${quote(process.execPath)}\n        args: ${quote(args)}\n        cwd: ${quote(root)}\n`);
     } else throw new Error('--mode must be native or mcp');
     return;

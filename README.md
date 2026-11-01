@@ -9,7 +9,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 [![CI](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-cb603f?style=flat-square)](LICENSE)
 [![Runtime dependencies: 0](https://img.shields.io/badge/runtime_dependencies-0-242720?style=flat-square)](package.json)
-[![Tests: 116](https://img.shields.io/badge/tests-116-6d7950?style=flat-square)](test)
+[![Tests: 126](https://img.shields.io/badge/tests-126-6d7950?style=flat-square)](test)
 
 [快速开始](#快速开始) · [插件设置](#插件设置) · [三种增强模式](#三种增强模式) · [能力一览](#能力一览) · [MCP 接入](#mcp-接入) · [上下文预算](#上下文预算)
 
@@ -19,14 +19,26 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略；需要时可以开启完全不省 token 的无限模式。** 内置 8 个按需技能、4 个工具入口、可关闭的增强思考，以及独立的 stdio MCP 服务。
 
-**0.3.0 是本轮功能更新：**
+**0.3.1 新增项目设定与知识库：** 本地目录/文本文件、公开 GitHub 仓库可登记为公共库或项目专属库，正文按需检索。项目卡片按当前工作目录自动匹配，跨会话复用，减少重复入门扫描。[使用说明](docs/knowledge.md)。
+
+**保留 0.3.0 的功能更新：**
 - **修复 we need to 思维**：旧版只有在模型名含 `deepseek` 且增强思考开启时才注入，其他模型或关闭增强思考后勾选确实没有效果。现在只取决于该开关，所有模型、增强思考关闭时都生效，并明确要求先写下 `We need to …` 目标，再展开证据、行动与验证。
 - **提升通用能力**：强化契约核对、最小完整改动、失败边界、自审与按证据验证；Pro/Flash 策略同步加强。
 - **新增无限 token 模式**：取消本插件默认的输出与读取截断，开放全部工具和最多 8 个技能正文，要求完整规划、完整实现与尽可能全面的验证。它不是“少用 token”的档位，而是主动用更多消耗换完整性。
 
 模型继续使用宿主当前 profile 启用的编辑、终端、联网、浏览器与子代理工具。本插件在本地加载技能、检索文件，不在后台发起模型请求。
 
-> **验证状态：** 116 项自动化测试通过；另有 9 项基于真实 DSH rc.5 组件的集成检查，覆盖最终提示词、当前模型切换、多会话隔离、实时开关、完整自定义提示词与无限模式策略。没有发起模型生成或付费模型请求，也未进行模型能力基准评测。详见[兼容性记录](docs/compatibility.md)。
+> **本轮验证：** 126 项自动化测试、12 项真实 DSH rc.3 组件检查通过；隔离的真实 rc.3 设置页已验证项目与公共/专属来源保存、刷新保持。GitHub 使用模拟接口验证，未访问真实联网仓库或发送模型生成请求。详见[知识库说明](docs/knowledge.md)与[兼容性记录](docs/compatibility.md)。
+
+## 项目设定与知识库
+
+在「设置 → Strong Skills 编程增强 → 项目设定与知识库」先添加项目，填写绝对根目录和最多 1200 字的设定卡片，再导入本地路径或公开 GitHub 仓库，选择公共或项目范围。当前工作目录决定模型能用哪份设定及专属库。
+
+![真实 DSH 中的项目设定与公共/专属知识来源](docs/assets/knowledge-settings.png)
+
+保存的是来源登记，首次工具调用才访问资料。默认只列目录，检索小量带来源、路径、行号的命中，再定向读片段；无限模式下知识结果仍最多 6000 字符。卡片占用少量常驻上下文，源码变化后请更新。[教程与 CLI/MCP 配置](docs/knowledge.md)。
+
+0.3.1 的发行说明与安装包见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.3.1)，也可按下文直接从仓库安装。
 
 ## 快速开始
 
@@ -54,7 +66,7 @@ dsh --profile web
 需要固定版本时，可在仓库来源后追加发布标签或提交 SHA：
 
 ```sh
-dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.3.0
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.3.1
 ```
 
 卸载时使用包名，然后重启对应 profile：
@@ -248,7 +260,7 @@ node bin/strong.mjs serve --root /absolute/path/to/project --unlimited on
 
 ## 上下文预算
 
-默认扩展工具与均衡增强约 **1,270 tokens**；切换为精简工具并关闭增强思考可回到约 **643 tokens**。所有普通模式都**不预载技能正文**，不会后台调用模型或运行隐藏的多轮评审。数字为字符启发式估算，不是 DeepSeek tokenizer 或账单测量，也未计入宿主上下文与 MCP 包装，可自行复算：
+默认扩展工具与均衡增强约 **1,260 tokens**；切换为精简工具并关闭增强思考可回到约 **634 tokens**。所有普通模式都**不预载技能正文**，不会后台调用模型或运行隐藏的多轮评审。数字为字符启发式估算，不是 DeepSeek tokenizer 或账单测量，也未计入宿主上下文与 MCP 包装，可自行复算：
 
 ```sh
 node bin/strong.mjs budget
@@ -257,7 +269,7 @@ node bin/strong.mjs budget --claude-mode on --we-need-to on
 node bin/strong.mjs budget --unlimited on
 ```
 
-在默认配置上，Claude 模式追加约 **173 tokens**，we need to 思维追加约 **157 tokens**，两者同时生效合计约 **330 tokens**（总计约 1,600）。这是相对同一模型、同一配置的增量；例如 `deepseek-flash` 的均衡扩展配置由约 1,358 增至 1,689 tokens。无限模式默认约 1,550 tokens；精简工具并关闭增强思考时约 1,172 tokens，但工具结果与读取范围不再截断。CLI `budget` 会显示 `maxResultChars: "unlimited"`、`maxFiles: 5000` 与 `maxSkillLoads: 8` 作为生效证据。
+在默认配置上，Claude 模式追加约 **173 tokens**，we need to 思维追加约 **157 tokens**，两者同时生效合计约 **330 tokens**（总计约 1,590）。这是相对同一模型、同一配置的增量；例如 `deepseek-flash` 的均衡扩展配置由约 1,348 增至 1,679 tokens。无限模式默认约 1,540 tokens；精简工具并关闭增强思考时约 1,162 tokens，但工具结果与读取范围不再截断。CLI `budget` 会显示 `maxResultChars: "unlimited"`、`maxFiles: 5000` 与 `maxSkillLoads: 8` 作为生效证据。
 
 | Profile（普通模式） | 单次结果字符上限 | 最多扫描文件 | 每次最多加载技能 |
 | --- | ---: | ---: | ---: |

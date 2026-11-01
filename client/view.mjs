@@ -1,4 +1,5 @@
 /** Accessible native controls inherit the Harness theme and work without a UI dependency. */
+import { createKnowledgeEditor, KNOWLEDGE_EN, KNOWLEDGE_ZH } from './knowledge-view.mjs';
 export const SETTINGS_CSS = `
 .strong-settings{--ss-line:var(--dsw-alias-border-l2,#d5d8de);--ss-muted:var(--dsw-alias-label-secondary,#666);font:inherit;color:inherit;max-width:760px;padding:8px 0 28px}
 .strong-settings *{box-sizing:border-box}.strong-settings h2{font:inherit;font-size:22px;font-weight:650;letter-spacing:-.03em;margin:0 0 8px}
@@ -12,11 +13,13 @@ export const SETTINGS_CSS = `
 .strong-settings__row :disabled,.strong-settings textarea:disabled{opacity:.5;cursor:not-allowed}.strong-settings textarea{resize:vertical;min-height:78px;margin-top:10px}.strong-settings__footer{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:22px}
 .strong-settings button{font:inherit;color:inherit;border:1px solid var(--ss-line);border-radius:8px;background:transparent;padding:8px 12px;cursor:pointer}.strong-settings button:disabled{opacity:.5;cursor:not-allowed}.strong-settings__status{min-height:24px;color:var(--ss-muted);font-size:13px}.strong-settings__error{color:var(--dsw-alias-state-error-primary,#b42318)}
 .strong-settings details{margin-top:24px}.strong-settings summary{font-size:14px;font-weight:550;cursor:pointer}.strong-settings__notice{padding:12px 14px;background:color-mix(in srgb,currentColor 5%,transparent);border-radius:8px;margin-top:14px!important}
+.strong-knowledge__field{margin:14px 0}.strong-knowledge label{display:block;font-size:13px;margin:0 0 6px}.strong-knowledge input,.strong-knowledge select{font:inherit;color:inherit;background:transparent;border:1px solid var(--ss-line);border-radius:8px;min-height:38px;padding:8px 10px;width:100%}.strong-knowledge button{margin:4px 8px 4px 0}.strong-knowledge summary{overflow-wrap:anywhere}.strong-knowledge textarea{margin-top:0}
 @media(prefers-color-scheme:dark){.strong-settings{--ss-line:var(--dsw-alias-border-l2,#444);--ss-muted:var(--dsw-alias-label-secondary,#aaa)}}
 @media(max-width:560px){.strong-settings__row{grid-template-columns:minmax(0,1fr) minmax(120px,42%);gap:12px}.strong-settings h2{font-size:20px}}
 `;
 
 export const EN = Object.freeze({
+  ...KNOWLEDGE_EN,
   title: 'Strong Skills', intro: 'Every model gets stronger planning, verification, and clarification. DeepSeek strategies add specialized guidance.',
   persistence: 'Changes save to this Harness profile and apply to the next request.',
   loading: 'Loading saved preferences…', unavailable: 'Strong Skills settings are unavailable in this profile.',
@@ -50,6 +53,7 @@ export const EN = Object.freeze({
 });
 
 export const ZH = Object.freeze({
+  ...KNOWLEDGE_ZH,
   title: 'Strong Skills 编程增强', intro: '所有模型均可增强规划、验证与需求澄清；DeepSeek 策略额外提供专用指导。',
   persistence: '更改会保存到当前 Harness 配置，并在下一次请求时生效。',
   loading: '正在加载已保存的设置…', unavailable: '当前配置中没有可用的 Strong Skills 设置。', readonly: '当前配置为只读，以下为已保存的设置。',
@@ -81,6 +85,7 @@ export const ZH = Object.freeze({
 
 /** The slot renderer supplies useStrongSettings from the controller's snapshot store. */
 export function createSettingsSection(h) {
+  const KnowledgeEditor = createKnowledgeEditor(h);
   return function StrongSettings(props) {
     const t = props.t ?? (key => EN[key] ?? key);
     if (props.view === 'summary') return t('intro');
@@ -182,6 +187,7 @@ export function createSettingsSection(h) {
             }
           },
         })),
+      h(KnowledgeEditor, { text: value.knowledgeConfig ?? '', disabled, set: props.set, t, surfaceId: id }),
       h('div', { className: 'strong-settings__footer' },
         h('button', { type: 'button', disabled, onClick: () => { void props.reset(); } }, t('reset')),
         h('div', { className: `strong-settings__status${state.error ? ' strong-settings__error' : ''}`, role: state.error ? 'alert' : 'status', 'aria-live': 'polite' },

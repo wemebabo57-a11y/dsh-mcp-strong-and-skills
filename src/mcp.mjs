@@ -1,6 +1,7 @@
 import { StrongEngine, toolsForConfig, buildPolicy, boundResult } from './engine.mjs';
 import { SKILL_CATALOG, loadSkill } from './skills.mjs';
 import packageInfo from '../package.json' with { type: 'json' };
+import { parseKnowledgeConfig, librariesForRoot } from './knowledge-config.mjs';
 
 // A small, dependency-free stdio implementation of the negotiated MCP subset.
 // No HTTP listener, sampling, prompts, subscriptions, or arbitrary command tool.
@@ -11,6 +12,7 @@ const MAX_IN_FLIGHT = 16;
 export function startMcp({ root, config = {}, input = process.stdin, output = process.stdout }) {
   const engine = new StrongEngine(root, config);
   const tools = toolsForConfig(engine.config);
+  const remoteKnowledge = librariesForRoot(parseKnowledgeConfig(engine.config.knowledgeConfig), engine.workspace.root).some(library => library.kind === 'github');
   const active = new Map();
   let state = 'new';
   let buffer = Buffer.alloc(0);
@@ -32,13 +34,13 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
       }
       state = 'initializing';
       return { protocolVersion: PROTOCOL_VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: packageInfo.name, version: packageInfo.version }, instructions: buildPolicy(engine.config) };
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: packageInfo.name, version: packageInfo.version }, instructions: buildPolicy(engine.config, { root: engine.workspace.root }) };
     }
     if (state !== 'ready') throw Object.assign(new Error('Send initialize and notifications/initialized first'), { rpcCode: -32002 });
     if (params !== undefined && (!params || typeof params !== 'object' || Array.isArray(params))) throw Object.assign(new Error('Parameters must be an object'), { rpcCode: -32602 });
     if (method === 'tools/list') {
       if (params?.cursor !== undefined) throw Object.assign(new Error('This static list has no cursor'), { rpcCode: -32602 });
-      return { tools: tools.map(tool => ({ ...tool, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } })) };
+      return { tools: tools.map(tool => ({ ...tool, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: tool.name === 'strong_context' && remoteKnowledge } })) };
     }
     if (method === 'tools/call') {
       if (!params || typeof params.name !== 'string' || !tools.some(tool => tool.name === params.name)) throw Object.assign(new Error('Unknown tool'), { rpcCode: -32602 });

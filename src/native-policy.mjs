@@ -23,7 +23,14 @@ export function installNativePolicy(ctx, currentConfig) {
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const assembly = await next();
     if (!assembly.sections.some(section => section.name === POLICY_SECTION)) return assembly;
-    const text = buildPolicy(currentConfig(), { selection: selectionForAssembly(assembly, context) });
+    const config = currentConfig();
+    let root;
+    if (config.knowledgeConfig.trim()) {
+      root = context?.agent
+        ? await ctx.workingDirectory.ensure(context.agent, context.signal)
+        : ctx.workingDirectory.defaultDirectory;
+    }
+    const text = buildPolicy(config, { selection: selectionForAssembly(assembly, context), root });
     return { ...assembly, sections: assembly.sections.map(section => section.name === POLICY_SECTION ? { ...section, text } : section) };
   }, { prepend: true });
 }

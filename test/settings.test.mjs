@@ -162,7 +162,7 @@ test('disposing a surface unsubscribes immediately and suppresses in-flight UI n
   assert.equal(await controller.set('enhancedThinking', false), false);
 });
 
-const h = (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat().filter(child => child !== null && child !== undefined) });
+const h = (type, props, ...children) => typeof type === 'function' ? type(props ?? {}) : ({ type, props: props ?? {}, children: children.flat().filter(child => child !== null && child !== undefined) });
 function descendants(tree) {
   if (!tree || typeof tree !== 'object') return [];
   return [tree, ...tree.children.flatMap(descendants)];
@@ -364,6 +364,42 @@ test('both native surfaces expose bilingual mode switches, persist choices, and 
 test('English and Chinese copy have the same keys', () => {
   assert.deepEqual(Object.keys(EN).sort(), Object.keys(ZH).sort());
   assert.equal(ZH.title, 'Strong Skills 编程增强');
+});
+
+test('knowledge forms save projects and scoped sources through the Host, edit scopes atomically and protect read-only profiles', async () => {
+  const f = fixture(), ui = pluginFixture(f.form);
+  const forms = tree => descendants(tree).filter(node => node.type === 'form');
+  const submit = async (form, values) => { form.props.onSubmit({ preventDefault() {}, currentTarget: { elements: { namedItem: name => ({ value: values[name] ?? '' }) } } }); await tick(); };
+  let tree = ui.render();
+  await submit(forms(tree).find(form => descendants(form).some(node => node.props.name === 'root')), { root: '/work/project-a', name: 'Project A', notes: 'Use Node.js; npm test' });
+  let stored = JSON.parse(f.form.getSnapshot().value.knowledgeConfig);
+  assert.equal(stored.projects[0].notes, 'Use Node.js; npm test');
+  tree = ui.render();
+  const importForm = forms(tree).find(form => descendants(form).some(node => node.props.name === 'location'));
+  const scopeSelect = descendants(importForm).find(node => node.props.name === 'scope');
+  assert.ok(scopeSelect.children.some(option => option.props.value === '/work/project-a'));
+  await submit(importForm, { id: 'docs', name: 'Docs', kind: 'github', location: 'https://github.com/example/docs', scope: '/work/project-a', ref: 'main' });
+  stored = JSON.parse(f.form.getSnapshot().value.knowledgeConfig);
+  assert.equal(stored.libraries[0].scope, '/work/project-a');
+  tree = ui.render('plugins.bundle.config');
+  await submit(forms(tree).find(form => descendants(form).some(node => node.props.name === 'root' && node.props.defaultValue === '/work/project-a')), { root: '/work/new-root', name: 'Project A', notes: 'Updated card' });
+  stored = JSON.parse(f.form.getSnapshot().value.knowledgeConfig);
+  assert.equal(stored.libraries[0].scope, '/work/new-root');
+  assert.equal(stored.projects[0].notes, 'Updated card');
+  const writes = f.writes.length;
+  assert.equal(await ui.registrations.get('settings.section').options.inject().set('knowledgeConfig', '{invalid'), false);
+  assert.equal(f.writes.length, writes);
+  f.form.publish({ writable: false });
+  tree = ui.render();
+  for (const form of forms(tree)) for (const control of descendants(form).filter(node => ['input', 'select', 'textarea', 'button'].includes(node.type))) assert.equal(control.props.disabled, true);
+  f.form.publish({ writable: true });
+  tree = ui.render();
+  descendants(tree).find(node => node.type === 'button' && content(node) === EN.projectDelete).props.onClick();
+  await tick();
+  stored = JSON.parse(f.form.getSnapshot().value.knowledgeConfig);
+  assert.deepEqual(stored, { projects: [], libraries: [] });
+  assert.ok(f.writes.every(write => write.field === 'knowledgeConfig'));
+  ui.dispose();
 });
 
 test('packaged bundle is fresh, registers lazily, and runs the same client surfaces', async () => {

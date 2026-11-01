@@ -3,13 +3,13 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const root = new URL('../', import.meta.url);
-const sources = ['client/controller.mjs', 'client/view.mjs', 'client/index.mjs'];
+const sources = ['src/knowledge-config.mjs', 'client/controller.mjs', 'client/knowledge-view.mjs', 'client/view.mjs', 'client/index.mjs'];
 const sections = [];
 for (const source of sources) {
   const code = (await readFile(new URL(source, root), 'utf8')).replace(/\r\n/g, '\n');
   // This explicit source list has only named, package-local imports and declaration exports.
   // Refuse unsupported syntax so a future edit cannot silently ship an incomplete bundle.
-  const body = code.replace(/^import \{[^\n]+\} from '\.\/(?:controller|view)\.mjs';\r?\n/gm, '')
+  const body = code.replace(/^import \{[^\n]+\} from '(?:\.\/(?:controller|view|knowledge-view)|\.\.\/src\/knowledge-config)\.mjs';\r?\n/gm, '')
     .replace(/^export (?=(?:const|function|async function) )/gm, '');
   if (/^\s*(?:import|export)\b/m.test(body)) throw new Error(`Unsupported module syntax in ${source}`);
   sections.push(`// ${source}\n${body.trimEnd()}`);

@@ -1,0 +1,9 @@
+{
+  "projects": [
+    { "root": "/work/shop", "name": "Shop", "notes": "TypeScript + React; src/ contains app code. Reuse existing components. Run npm test and npm run build. Update this card when architecture changes." }
+  ],
+  "libraries": [
+    { "id": "shared-docs", "name": "Shared engineering notes", "kind": "local", "location": "/work/shared-docs", "scope": "global" },
+    { "id": "shop-reference", "name": "Shop reference repository", "kind": "github", "location": "https://github.com/example/shop-docs", "ref": "main", "scope": "/work/shop" }
+  ]
+}

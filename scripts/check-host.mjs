@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { apply } from '../src/index.mjs';
 import { buildPolicy } from '../src/engine.mjs';
 import { POLICY_SECTION } from '../src/native-policy.mjs';
+import path from 'node:path';
 
 const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== '--runtime') throw new Error('Usage: node scripts/check-host.mjs --runtime <isolated DSH installation directory>');
@@ -20,8 +21,8 @@ const ctx = new Context();
 new SystemPrompt(ctx, {});
 const tools = [];
 ctx.provide('tools', { register(tool) { tools.push(tool); } });
-ctx.provide('workingDirectory', { defaultDirectory: process.cwd() });
-const state = { weNeedToThinking: true, enhancedThinking: true, unlimitedTokens: false };
+ctx.provide('workingDirectory', { defaultDirectory: process.cwd(), async ensure(agent) { return agent.testDirectory ?? process.cwd(); } });
+const state = { weNeedToThinking: true, enhancedThinking: true, unlimitedTokens: false, knowledgeConfig: '' };
 apply(ctx, Object.fromEntries(Object.keys(state).map(key => [key, { get: () => state[key] }])));
 const scopes = [], disposers = [];
 function agent(id, selected, staleModel = 'other') {
@@ -68,6 +69,27 @@ try {
   await verify('the live mode switch removes the guidance', first, deepseek, false);
   state.weNeedToThinking = true;
   await verify('reenabling uses the current route', first, deepseek, true);
+  const rootA = path.resolve('project-a'), rootB = path.resolve('project-b');
+  first.agent.testDirectory = rootA;
+  second.agent.testDirectory = rootB;
+  const knowledge = { projects: [{ root: rootA, name: 'A', notes: 'PROJECT_A_CARD' }, { root: rootB, name: 'B', notes: 'PROJECT_B_CARD' }], libraries: [
+    { id: 'common', name: 'Common', kind: 'local', location: process.cwd(), scope: 'global' },
+    { id: 'only-a', name: 'A private', kind: 'local', location: process.cwd(), scope: rootA },
+  ] };
+  state.knowledgeConfig = JSON.stringify(knowledge);
+  const aPrompt = renderPrompt(await ctx.systemPrompt.assemble(assembleContextFor(first.agent)));
+  const bPrompt = renderPrompt(await ctx.systemPrompt.assemble(assembleContextFor(second.agent)));
+  assert.match(aPrompt, /PROJECT_A_CARD/); assert.doesNotMatch(aPrompt, /PROJECT_B_CARD/);
+  assert.match(bPrompt, /PROJECT_B_CARD/); assert.doesNotMatch(bPrompt, /PROJECT_A_CARD/);
+  checks.push('project cards are injected into the real final prompt without cross-agent leakage');
+  const catalog = await tools.find(tool => tool.name === 'strong_context').execute({ action: 'knowledge' }, { agent: first.agent, signal: new AbortController().signal });
+  assert.deepEqual(catalog.libraries.map(item => item.id), ['only-a', 'common']);
+  checks.push('native knowledge tool resolves the same current project as the prompt');
+  knowledge.projects[0].notes = 'UPDATED_PROJECT_CARD';
+  state.knowledgeConfig = JSON.stringify(knowledge);
+  assert.match(renderPrompt(await ctx.systemPrompt.assemble(assembleContextFor(first.agent))), /UPDATED_PROJECT_CARD/);
+  checks.push('live saved project-card edits reach the next assembly');
+  state.knowledgeConfig = '';
   first.agent.ctx.systemPrompt.section({ name: 'complete-user-prompt', order: 1, text: 'An explicit complete prompt', complete: true });
   const complete = await ctx.systemPrompt.assemble(assembleContextFor(first.agent));
   assert.equal(renderPrompt(complete), 'An explicit complete prompt', 'The plugin must respect a complete user-owned prompt');

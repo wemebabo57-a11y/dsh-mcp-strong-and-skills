@@ -1,3 +1,5 @@
+import { parseKnowledgeConfig } from './knowledge-config.mjs';
+
 export const PROFILES = Object.freeze({
   lean: { maxOutputChars: 4000, maxFiles: 400, maxSkillLoads: 1 },
   balanced: { maxOutputChars: 6000, maxFiles: 800, maxSkillLoads: 2 },
@@ -11,11 +13,12 @@ export const UNLIMITED_LIMITS = Object.freeze({
 
 export function resolveConfig(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Config must be an object');
-  const allowed = new Set(['profile', 'maxOutputChars', 'maxFiles', 'maxFileBytes', 'maxSkillLoads', 'brandIntent', 'allowBrandColors', 'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens']);
+  const allowed = new Set(['profile', 'maxOutputChars', 'maxFiles', 'maxFileBytes', 'maxSkillLoads', 'brandIntent', 'allowBrandColors', 'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'knowledgeConfig']);
   for (const key of Object.keys(input)) if (!allowed.has(key)) throw new Error(`Unknown config: ${key}`);
   const profile = input.profile === undefined ? 'balanced' : input.profile;
   if (typeof profile !== 'string' || !Object.hasOwn(PROFILES, profile)) throw new Error('profile must be lean, balanced, or thorough');
-  const config = { ...PROFILES[profile], maxFileBytes: 262144, enhancedThinking: true, thinkingLevel: 'balanced', clarification: 'more', modelPreset: 'auto', toolSet: 'expanded', claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, ...input, profile };
+  const config = { ...PROFILES[profile], maxFileBytes: 262144, enhancedThinking: true, thinkingLevel: 'balanced', clarification: 'more', modelPreset: 'auto', toolSet: 'expanded', claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', ...input, profile };
+  parseKnowledgeConfig(config.knowledgeConfig);
   for (const [key, values] of Object.entries({ thinkingLevel: ['balanced', 'deep'], clarification: ['auto', 'more', 'few'], modelPreset: ['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'], toolSet: ['compact', 'expanded'] })) {
     if (typeof config[key] !== 'string' || !values.includes(config[key])) throw new Error(`Invalid ${key}`);
   }

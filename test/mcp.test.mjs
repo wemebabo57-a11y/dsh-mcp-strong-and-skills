@@ -4,6 +4,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 import packageInfo from '../package.json' with { type: 'json' };
+import * as fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const executable = fileURLToPath(new URL('../bin/strong.mjs', import.meta.url));
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -84,6 +87,24 @@ test('MCP compact/off removes optional tools and enhancement policy', async t =>
   assert.deepEqual(listed.result.tools.map(tool => tool.name), ['strong_skill', 'strong_context']);
   assert.equal(init.instructions.includes('增强编码'), false);
   assert.equal((await c.request(3, 'tools/call', { name: 'strong_code', arguments: { action: 'symbols' } })).error.code, -32602);
+});
+
+test('MCP reads a saved project card and retrieves local knowledge on demand through the same gateway', async t => {
+  const parent = await fs.realpath(os.tmpdir()), temporary = await fs.mkdtemp(path.join(parent, 'strong-mcp-knowledge-'));
+  t.after(async () => { assert.equal(path.dirname(temporary), parent); assert.ok(path.basename(temporary).startsWith('strong-mcp-knowledge-')); await fs.rm(temporary, { recursive: true, force: true }); });
+  await fs.writeFile(path.join(temporary, 'guide.md'), 'ON_DEMAND_SOURCE_MARKER\n');
+  const file = path.join(temporary, 'sources.json');
+  await fs.writeFile(file, JSON.stringify({ projects: [{ root, name: 'Current', notes: 'PERSISTED_PROJECT_CARD' }], libraries: [{ id: 'shared', name: 'Docs', kind: 'local', location: path.join(temporary, 'guide.md'), scope: 'global' }, { id: 'remote', name: 'Remote', kind: 'github', location: 'https://github.com/example/docs', scope: 'global' }] }));
+  const c = client(t, 'balanced', ['--knowledge-file', file]);
+  const init = await initialize(c);
+  assert.match(init.instructions, /PERSISTED_PROJECT_CARD/);
+  assert.doesNotMatch(init.instructions, /ON_DEMAND_SOURCE_MARKER/);
+  const catalog = await c.request(2, 'tools/call', { name: 'strong_context', arguments: { action: 'knowledge' } });
+  assert.equal(JSON.parse(catalog.result.content[0].text).libraries[0].id, 'shared');
+  const read = await c.request(3, 'tools/call', { name: 'strong_context', arguments: { action: 'knowledge', path: 'shared/guide.md', limit: 1 } });
+  assert.equal(JSON.parse(read.result.content[0].text).lines[0].text, 'ON_DEMAND_SOURCE_MARKER');
+  const tools = await c.request(4, 'tools/list');
+  assert.equal(tools.result.tools.find(tool => tool.name === 'strong_context').annotations.openWorldHint, true);
 });
 
 test('MCP mode flags enable Claude guidance and all-model we-need-to guidance', async t => {

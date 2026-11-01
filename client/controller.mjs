@@ -1,4 +1,5 @@
 /** Browser-safe controller over Harness ConfigForms. No local persistence is used. */
+import { parseKnowledgeConfig } from '../src/knowledge-config.mjs';
 export const SETTINGS_ENTRY = 'strong-skills';
 export const SETTINGS_PACKAGE = 'dsh-strong-skills';
 export const SETTINGS_FIELDS = Object.freeze([
@@ -6,6 +7,7 @@ export const SETTINGS_FIELDS = Object.freeze([
   'claudeMode', 'weNeedToThinking', 'unlimitedTokens',
   'profile', 'allowBrandColors', 'brandIntent', 'maxOutputChars', 'maxFiles',
   'maxFileBytes', 'maxSkillLoads',
+  'knowledgeConfig',
 ]);
 
 const CHOICES = Object.freeze({
@@ -30,7 +32,7 @@ const PROFILE_LIMITS = Object.freeze({
 /** Config's optional limit overrides inherit their runtime defaults from the selected profile. */
 function displaySettings(value) {
   if (value === undefined) return undefined;
-  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false };
+  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '' };
   const resolved = { ...value };
   for (const [field, fallback] of Object.entries(defaults)) {
     if (resolved[field] === undefined) resolved[field] = fallback;
@@ -42,6 +44,8 @@ export function validateSetting(field, value) {
   if (!SETTINGS_FIELDS.includes(field)) throw new TypeError(`Unknown setting: ${field}`);
   if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens'].includes(field)) {
     if (typeof value !== 'boolean') throw new TypeError(`${field} must be boolean`);
+  } else if (field === 'knowledgeConfig') {
+    parseKnowledgeConfig(value);
   } else if (field === 'brandIntent') {
     if (typeof value !== 'string' || value.length > 200) throw new TypeError('Brand intent must be at most 200 characters');
   } else if (Object.hasOwn(CHOICES, field)) {

@@ -35,6 +35,13 @@ function deniedSegment(segment) {
     /^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)(?:\.|$)/.test(name);
 }
 
+/** Same path exclusions for remote knowledge; Git symlinks are rejected separately. */
+export function isKnowledgePath(value) {
+  if (typeof value !== 'string' || !value || /[\0\\:]/.test(value) || value.startsWith('/')) return false;
+  const parts = value.split('/');
+  return !parts.some(part => !part || part === '.' || part === '..' || deniedSegment(part) || SKIP_DIRS.has(part.toLowerCase())) && !BINARY_EXTENSIONS.has(path.extname(value).toLowerCase());
+}
+
 function inside(root, target) {
   const relative = path.relative(root, target);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));

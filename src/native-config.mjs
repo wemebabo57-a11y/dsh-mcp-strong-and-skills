@@ -16,6 +16,7 @@ export function createConfigSchema(z) {
     toolSet: choices(['compact', 'expanded'], 'expanded', '工具集合：基础 2 个或扩展 4 个'),
     allowBrandColors: z.boolean().default(false).description('尊重指定品牌的蓝紫配色').volatile(),
     brandIntent: z.string().max(200).default('').description('已有品牌或用户配色要求').volatile(),
+    knowledgeConfig: z.string().max(65536).default('').description('公共/项目知识来源与项目设定；通过插件专用面板编辑').volatile(),
     maxOutputChars: integer(2000, 20000, '单次结果字符上限；无限 token 模式下自动取最大值'),
     maxFiles: integer(20, 5000, '最多扫描文件；留空跟随预算档位'),
     maxFileBytes: integer(1024, 262144, '单个文件字节上限'),

@@ -2,6 +2,12 @@
 
 Initial contract review on 2026-10-24; updated for v0.3.0 on 2026-10-31 against official upstream source and real DSH 0.2.1-rc.5 components (rc.3-compatible contracts).
 
+## 0.3.1 projects and on-demand knowledge — 2026-11-01
+
+The new `knowledgeConfig` volatile string persists project cards and source registrations through the existing ConfigForms surface. Native final assembly resolves the current working directory only when this configuration is present; the matching card and a short source-count hint are injected without reading library bodies. The existing `strong_context` gateway handles project cards, catalog, search and line reads. Project sources are filtered at every call, including cache hits. MCP uses its configured root and marks the gateway open-world when an available source uses GitHub.
+
+Verification in this working copy: 126 automated tests; 12 real published rc.3 component checks including final project cards, per-Agent isolation, current-directory consistency and live edits; an isolated rc.3 Web browser verifies adding project cards plus shared/private sources, reload persistence and reset with no runtime errors. EN/ZH component previews at 320/360/420px have no horizontal overflow. GitHub HTTP paths, excluded files, caching, errors and caps are tested with mock responses, not a live remote repository. No user profile or model inference was used. The rc.5 results below are the historical 0.3.0 record, not a new claim of rc.5 retesting. See [knowledge usage and limits](knowledge.md).
+
 ## 0.3.0 all-model guidance and unlimited mode — 2026-10-31
 
 Version 0.3.0 changes the optional we-need-to mode from a model-gated hint into an explicitly selected, all-model behavioral instruction. In 0.2.2 it required both `enhancedThinking` and a current model name containing `deepseek` or 「深度求索」; every other model, and every session with enhanced thinking off, silently ignored the checked switch. That gate was the reported “勾选后没用” defect. `getModeState()` now activates the guidance whenever `weNeedToThinking === true`; model selection is diagnostic only. The policy explicitly asks the model to write “We need to …” as an internal goal, then work through goal, known facts/assumptions, minimum evidence, action, verification, and risk, while allowing the user's language and a short public rationale. This is still prompt guidance: it does not change model weights or guarantee a visible chain of thought.
