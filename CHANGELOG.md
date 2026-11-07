@@ -1,15 +1,29 @@
 # 更新记录
 
-## 0.5.0 — 2026-11-07
+## 0.6.0 — 2026-11-07
+
+- **可选附加 Shell（默认关闭）**：新增第 5 个工具 `strong_shell`，后端可选 `auto`、`git-bash`、`wsl`、`bash`、`pwsh`、`cmd`。Windows 的 `auto` 依次尝试 Git Bash → WSL → PowerShell 7 → cmd；POSIX 使用 Bash。可另设 `shellPath` 绝对路径和 `wslDistro`。
+- **真正使用 Bash**：命令用选定可执行文件直接启动，不通过 `shell:true` 交给 Windows 默认 shell 转义。Git Bash 和 WSL 均以非交互式 `bash --noprofile --norc -c` 执行，让模型直接使用 Bash 语法。
+- **不替换原生能力**：DSH 默认 shell、原生命令与文件工具保持不变；`strong_shell` 只是用户显式开启的附加通道，不经过 DSH 原生沙箱或审批。设置页警告明确说明：工作目录从项目内开始，但命令以当前用户权限运行，可访问项目外文件，仅应在可信项目中开启。
+- **边界控制**：相对 `cwd` 经过词法与真实路径校验；过滤明显敏感的环境变量；stdin 关闭；stdout/stderr 各限制 64 KiB；默认超时 60 秒（1–120 秒可调）；取消或超时终止子进程树。它是便捷命令通道，不是操作系统级隔离。
+- **全链路开关**：设置页、原生 Config、CLI `--shell on|off`、`--shell-backend`、`--shell-path`、`--wsl-distro`、生成的 native/MCP patch 与独立 MCP 服务共用配置。MCP 将 `strong_shell` 标记为非只读、可破坏、非幂等、开放世界。
+- **兼容迁移**：旧 profile 的 `bashTool` 迁移为 `shellTool`；显式 `shellTool` 优先。默认工具面仍为 4 个，开启后为 5 个；精简工具集下为 2 + 1 个。
+- 0.4.0 与 0.5.0 的两次尝试及其发行版、标签已撤回；本版是替代实现。
+- 137 项自动化测试通过；静态检查覆盖默认与启用 Shell 的预算，真实 DSH 组件检查覆盖第 5 个工具的动态注册。未发送模型生成请求，也未访问真实联网仓库。
+
+## 0.5.0 — 2026-11-07（已撤回，由 0.6.0 取代）
+
+> 本版直接移除 0.4.0 的 Bash 工具，未提供真正的可切换 Shell；其发行版与标签已删除。0.6.0 以可选 `strong_shell` 取代本版方案，以下保留原始记录。
+
 
 - **移除 0.4.0 的 `strong_bash` 与 `bashTool` 开关**：它并非“把默认 shell 改成 Bash”，而是在 DSH 原生 shell（Windows 为 `pwsh`）和文件工具之外额外注册的命令工具；Windows 上实际调用 `cmd.exe`，并绕过原生沙箱/审批。
 - 旧提示“内置 Bash 已开启：模型可以执行命令并修改文件”把 DSH 已有能力说成新能力，已随工具一并删除；设置页、原生 Config、CLI `--bash`、MCP 暴露、文档与测试全部清理。
 - 工具面恢复为 4 个；旧 profile 中残留的 `bashTool` 会被接受但忽略，避免升级后配置加载失败。
 - 127 项自动化测试通过；未发送模型生成请求。
 
-## 0.4.0 — 2026-11-07
+## 0.4.0 — 2026-11-07（已撤回，由 0.6.0 取代）
 
-> 0.5.0 已移除本版本引入的 `strong_bash`；以下保留原始记录，便于追溯。
+> 本版 `strong_bash` 在 Windows 实际调用 `cmd.exe`，不能选择 Git Bash/WSL，也不改变 DSH 默认 shell；其发行版与标签已删除。以下保留原始记录，便于追溯。
 
 - **新增可选内置 Bash**（`bashTool`，默认关闭）：开启后原生插件注册第 5 个工具 `strong_bash`，模型可在工作区执行构建、测试、格式化、Git 等非交互命令，返回退出码、标准输出、错误输出与超时/截断状态。
 - 设置页、原生 Config、CLI `--bash on|off`、`config` 生成的原生/MCP patch 与独立 MCP 服务共用同一开关；关闭时不注册、不列出、不执行该工具。默认工具面仍为 4 个。

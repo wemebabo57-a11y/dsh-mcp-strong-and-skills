@@ -89,6 +89,26 @@ test('MCP compact/off removes optional tools and enhancement policy', async t =>
   assert.equal((await c.request(3, 'tools/call', { name: 'strong_code', arguments: { action: 'symbols' } })).error.code, -32602);
 });
 
+test('MCP shell tool is opt-in, honestly annotated, and executes a real command', async t => {
+  const c = client(t, 'lean', ['--shell', 'on']);
+  await initialize(c);
+  const listed = await c.request(2, 'tools/list');
+  assert.equal(listed.result.tools.length, 5);
+  const shell = listed.result.tools.find(tool => tool.name === 'strong_shell');
+  assert.deepEqual(shell.annotations, { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
+  const result = await c.request(3, 'tools/call', { name: 'strong_shell', arguments: { command: 'printf shell-mcp' } });
+  if (result.result.isError) {
+    if (/未找到|未安装/.test(result.result.content[0].text)) { t.skip('No supported shell is installed on this host.'); return; }
+    assert.fail(result.result.content[0].text);
+  }
+  const value = JSON.parse(result.result.content[0].text);
+  assert.equal(value.exitCode, 0);
+  assert.equal(value.stdout, 'shell-mcp');
+  assert.equal(value.stderr, '');
+  assert.ok(['git-bash', 'bash', 'wsl'].includes(value.shell.backend));
+  assert.equal(c.stderr, '');
+});
+
 test('MCP reads a saved project card and retrieves local knowledge on demand through the same gateway', async t => {
   const parent = await fs.realpath(os.tmpdir()), temporary = await fs.mkdtemp(path.join(parent, 'strong-mcp-knowledge-'));
   t.after(async () => { assert.equal(path.dirname(temporary), parent); assert.ok(path.basename(temporary).startsWith('strong-mcp-knowledge-')); await fs.rm(temporary, { recursive: true, force: true }); });

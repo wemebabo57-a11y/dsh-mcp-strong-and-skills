@@ -4,7 +4,8 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { apply, inject, name, Config } from '../src/index.mjs';
-import { TOOLS, BASE_TOOLS, buildPolicy } from '../src/engine.mjs';
+import { TOOLS, ALL_TOOLS, BASE_TOOLS, buildPolicy } from '../src/engine.mjs';
+import { resolveShell } from '../src/shell-tool.mjs';
 import { POLICY } from '../src/policy.mjs';
 import { snapshotConfig } from '../src/native-config.mjs';
 
@@ -38,7 +39,7 @@ async function temporaryWorkspace(t, marker) {
   return root;
 }
 
-test('native plugin registers a dynamic policy and four canonical tools', () => {
+test('native plugin registers a dynamic policy and every canonical tool', () => {
   const { ctx, sections, registrations, conditions, visibleNames } = host();
   apply(ctx);
   assert.equal(name, 'strong-skills');
@@ -49,13 +50,14 @@ test('native plugin registers a dynamic policy and four canonical tools', () => 
   assert.equal(sections[0].interpolate, false);
   assert.equal(typeof sections[0].text, 'function');
   assert.equal(sections[0].text(), buildPolicy());
-  assert.deepEqual([...registrations.keys()], TOOLS.map(tool => tool.name));
+  assert.deepEqual([...registrations.keys()], ALL_TOOLS.map(tool => tool.name));
   assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
   for (const tool of BASE_TOOLS) assert.equal(conditions.get(tool.name), undefined);
+  assert.equal(conditions.get('strong_shell')(), false);
   for (const definition of registrations.values()) {
     assert.equal(definition.parameters.type, 'object');
     assert.equal(definition.output.schema.type, 'object');
-    assert.equal(definition.isConcurrencySafe({}), true);
+    assert.equal(definition.isConcurrencySafe({}), definition.name !== 'strong_shell');
     const canonical = { skills: [{ id: 'example', content: '中文\n"quoted"' }], truncated: false };
     const rendered = definition.output.render({}, canonical);
     assert.equal(rendered.length, 1);
@@ -151,6 +153,26 @@ test('live compact tools disappear from discovery and reject execution until exp
   assert.deepEqual(await code.execute(args, execution), first);
 });
 
+test('live shell setting adds and removes strong_shell without disturbing the tool set', async t => {
+  const root = await temporaryWorkspace(t, 'live shell');
+  const state = { shellTool: false };
+  const { ctx, registrations, visibleNames } = host(undefined, root);
+  apply(ctx, { shellTool: { get: () => state.shellTool }, shellBackend: 'auto' });
+  assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
+  state.shellTool = true;
+  assert.deepEqual(visibleNames(), [...TOOLS.map(tool => tool.name), 'strong_shell']);
+  const execution = { signal: new AbortController().signal };
+  let shellAvailable = true;
+  try { await resolveShell({ backend: 'auto' }); } catch { shellAvailable = false; }
+  if (shellAvailable) {
+    const result = await registrations.get('strong_shell').execute({ command: 'printf shell-live' }, execution);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, 'shell-live');
+  }
+  state.shellTool = false;
+  await assert.rejects(registrations.get('strong_shell').execute({ command: 'printf no' }, execution), /Unknown tool/);
+});
+
 test('unlimited native setting overrides compact discovery and stays live', async t => {
   const root = await temporaryWorkspace(t, 'unlimited native');
   const state = { unlimitedTokens: false };
@@ -180,7 +202,11 @@ test('native Standard Schema validates defaults and rejects invalid settings', a
   assert.equal(config.modelPreset, 'auto');
   assert.equal(config.toolSet, 'expanded');
   assert.equal(config.unlimitedTokens, false);
-  for (const invalid of [{ unlimitedTokens: 'true' }, { enhancedThinking: 'false' }, { claudeMode: 'true' }, { weNeedToThinking: 1 }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { maxFiles: 1 }]) {
+  assert.equal(config.shellTool, false);
+  assert.equal(config.shellBackend, 'auto');
+  assert.equal(config.shellPath, '');
+  assert.equal(config.wslDistro, '');
+  for (const invalid of [{ unlimitedTokens: 'true' }, { enhancedThinking: 'false' }, { claudeMode: 'true' }, { weNeedToThinking: 1 }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { shellTool: 'true' }, { shellBackend: 'fish' }, { shellPath: 'x'.repeat(1001) }, { wslDistro: 'x'.repeat(101) }, { maxFiles: 1 }]) {
     const result = await standard.validate(invalid);
     assert.ok(result.issues?.length, JSON.stringify(invalid));
   }

@@ -5,6 +5,7 @@ export const SETTINGS_PACKAGE = 'dsh-strong-skills';
 export const SETTINGS_FIELDS = Object.freeze([
   'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet',
   'claudeMode', 'weNeedToThinking', 'unlimitedTokens',
+  'shellTool', 'shellBackend', 'shellPath', 'wslDistro',
   'profile', 'allowBrandColors', 'brandIntent', 'maxOutputChars', 'maxFiles',
   'maxFileBytes', 'maxSkillLoads',
   'knowledgeConfig',
@@ -15,6 +16,7 @@ const CHOICES = Object.freeze({
   clarification: ['auto', 'more', 'few'],
   modelPreset: ['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'],
   toolSet: ['compact', 'expanded'],
+  shellBackend: ['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd'],
   profile: ['lean', 'balanced', 'thorough'],
 });
 
@@ -32,7 +34,8 @@ const PROFILE_LIMITS = Object.freeze({
 /** Config's optional limit overrides inherit their runtime defaults from the selected profile. */
 function displaySettings(value) {
   if (value === undefined) return undefined;
-  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '' };
+  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '' };
+  if (value.shellTool === undefined && value.bashTool === true) defaults.shellTool = true;
   const resolved = { ...value };
   for (const [field, fallback] of Object.entries(defaults)) {
     if (resolved[field] === undefined) resolved[field] = fallback;
@@ -42,12 +45,16 @@ function displaySettings(value) {
 
 export function validateSetting(field, value) {
   if (!SETTINGS_FIELDS.includes(field)) throw new TypeError(`Unknown setting: ${field}`);
-  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens'].includes(field)) {
+  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool'].includes(field)) {
     if (typeof value !== 'boolean') throw new TypeError(`${field} must be boolean`);
   } else if (field === 'knowledgeConfig') {
     parseKnowledgeConfig(value);
   } else if (field === 'brandIntent') {
     if (typeof value !== 'string' || value.length > 200) throw new TypeError('Brand intent must be at most 200 characters');
+  } else if (field === 'shellPath') {
+    if (typeof value !== 'string' || value.length > 1000 || /[\0\r\n]/.test(value)) throw new TypeError('Shell path must be a single-line string up to 1000 characters');
+  } else if (field === 'wslDistro') {
+    if (typeof value !== 'string' || value.length > 100 || /[\0\r\n]/.test(value)) throw new TypeError('WSL distro must be a single-line string up to 100 characters');
   } else if (Object.hasOwn(CHOICES, field)) {
     if (!CHOICES[field].includes(value)) throw new TypeError(`Invalid ${field}`);
   } else {

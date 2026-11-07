@@ -50,6 +50,33 @@ test('CLI enhancement flags and generated patches preserve effective options', (
   assert.equal(run(['budget', '--thinking', 'invalid']).status, 1);
 });
 
+test('optional shell flags round-trip through executable configuration', () => {
+  const shellArgs = ['--shell', 'on', '--shell-backend', 'git-bash', '--wsl-distro', 'Ubuntu'];
+  const native = run(['config', '--mode', 'native', '--root', root, ...shellArgs]);
+  assert.equal(native.status, 0, native.stderr);
+  assert.match(native.stdout, /shellTool: true/);
+  assert.match(native.stdout, /shellBackend: "git-bash"/);
+  assert.match(native.stdout, /wslDistro: "Ubuntu"/);
+  const mcp = run(['config', '--mode', 'mcp', '--root', root, ...shellArgs]);
+  assert.equal(mcp.status, 0, mcp.stderr);
+  const args = JSON.parse(mcp.stdout.match(/args: (.+)/)[1]);
+  for (const [flag, value] of [['--shell', 'on'], ['--shell-backend', 'git-bash'], ['--wsl-distro', 'Ubuntu']]) {
+    const index = args.lastIndexOf(flag);
+    assert.ok(index >= 0, flag);
+    assert.equal(args[index + 1], value);
+  }
+  const budget = run(['budget', ...shellArgs]);
+  assert.equal(budget.status, 0, budget.stderr);
+  assert.equal(JSON.parse(budget.stdout).residentTools, 5);
+  const off = run(['config', '--mode', 'native', '--root', root, '--shell', 'off']);
+  assert.equal(off.status, 0, off.stderr);
+  assert.match(off.stdout, /shellTool: false/);
+  const invalid = run(['budget', '--shell', 'maybe']);
+  assert.equal(invalid.status, 1);
+  assert.equal(invalid.stdout, '');
+  assert.match(invalid.stderr, /must be on or off/);
+});
+
 test('invalid CLI usage fails visibly on stderr', () => {
   for (const args of [['serve'], ['config', '--mode', 'wrong', '--root', root], ['skill', '--id', '../debug'], ['inspect', '--root', root, '--action', 'run'], ['budget', '--profile', 'unknown'], ['budget', '--__proto__', 'x'], ['unknown']]) {
     const result = run(args);

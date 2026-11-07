@@ -1,12 +1,27 @@
 # DeepSeek Harness compatibility
 
-Initial contract review on 2026-10-24; updated for v0.3.0 on 2026-10-31 against official upstream source and real DSH 0.2.1-rc.5 components (rc.3-compatible contracts).
+Initial contract review on 2026-10-24; updated for v0.6.0 on 2026-11-07 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
 
-## 0.5.0 removal of redundant Bash tool — 2026-11-07
+## 0.6.0 selectable shell tool — 2026-11-07
+
+Version 0.6.0 replaces the withdrawn 0.4.0 and 0.5.0 attempts. The optional `strong_shell` tool is **off by default** and is registered only when `shellTool === true`; the default plugin surface remains four tools. It is an additional command path, not a switch for the DSH native shell: DSH still owns its native command/file tools, and neither their configuration nor their sandbox/approval behavior is changed by this plugin.
+
+The plugin resolves and launches the selected executable directly (`shell:false`), so Windows command quoting is not delegated to `cmd.exe`. Available backends are `auto`, `git-bash`, `wsl`, `bash`, `pwsh` and `cmd`. On Windows, `auto` tries Git Bash (the standard `C:\Program Files\Git\bin\bash.exe` location and `PATH`), then probes WSL with `wsl -l -q`, then PowerShell 7, then `ComSpec`. On POSIX, `auto` uses Bash. `shellPath` may pin an absolute executable and must agree with an explicit backend; `wslDistro` selects a WSL distribution. Git Bash and WSL execute `bash --noprofile --norc -c <command>`; PowerShell uses `-NoLogo -NoProfile -NonInteractive -Command`, and cmd uses `/d /s /c`.
+
+The working directory starts at the workspace root or a validated relative `cwd`. Lexical and realpath checks reject absolute paths, parent traversal, symlinks/junctions and missing directories. The child receives an allowlisted non-secret environment, no stdin, and stdout/stderr are each capped at 64 KiB. The default timeout is 60 seconds (1–120 seconds configurable); timeout or cancellation kills the process tree with `taskkill /T /F` on Windows and a POSIX process-group signal. These are convenience bounds, not an OS sandbox: the command runs with the current user's permissions and can access paths outside the project. It does not pass through DSH native sandboxing or approval, so the UI warns users to enable it only in trusted projects.
+
+The native Config adds volatile `shellTool`, `shellBackend`, `shellPath` and `wslDistro` fields. Legacy profiles with `bashTool` are migrated to `shellTool` when the latter is absent; an explicit `shellTool` wins. The CLI accepts `--shell on|off`, `--shell-backend`, `--shell-path` and `--wsl-distro`; generated native/MCP patches forward the same values. MCP lists `strong_shell` only when enabled and annotates it as non-read-only, destructive, non-idempotent and open-world.
+
+Verification in this working copy: **137 automated tests**, including real Git Bash/Bash execution, exit codes, relative cwd, path-escape rejection, secret-environment filtering, 64 KiB truncation, timeout/abort tree termination, config migration, native live registration, CLI round-trip and MCP discovery/call. Static checking covers both default and shell-enabled budgets. The real-host component check expects five registrations while the default visible surface stays four. No live model inference or remote repository request was used. This establishes contract and execution behavior, not model response quality.
+
+## 0.5.0 removal of redundant Bash tool — 2026-11-07（已撤回，由 0.6.0 取代）
+
+> The 0.4.0 and 0.5.0 releases and tags were deleted. Version 0.6.0 restores the feature as a genuinely selectable shell instead of removing it; the notes below are retained as history.
+
 
 Version 0.5.0 removes the `strong_bash` tool introduced in 0.4.0. DSH already exposes native command execution and file editing: `dsh-tool-pwsh` is active on Windows, `dsh-tool-bash` is active on POSIX, and the file tools are always available. Enabling the plugin's extra tool did not grant those capabilities. It also did not change the default shell; on Windows it ran through `cmd.exe`, and it bypassed the native sandbox/approval path. The `bashTool` setting, CLI flag, MCP exposure and native config field were removed. Legacy `bashTool` values are accepted and ignored so existing profiles still load. Verification: 127 automated tests and 12 real rc.3 component checks; no model inference or live network access.
 
-## 0.4.0 optional built-in Bash — 2026-11-07（已在 0.5.0 移除）
+## 0.4.0 optional built-in Bash — 2026-11-07（已撤回，由 0.6.0 取代）
 
 The new volatile boolean `bashTool` defaults to false and reuses the existing ConfigForms/native/CLI/MCP configuration path. When enabled, the native plugin registers a fifth tool, `strong_bash`, through a live `when` predicate; MCP lists it only in that case and marks it non-read-only/destructive/open-world; the CLI accepts `--bash on|off` and the dedicated `bash` subcommand requires the flag. Default tool discovery remains four tools.
 

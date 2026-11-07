@@ -88,7 +88,7 @@ test('host refusal/reconnect updates and transport errors preserve accepted sett
 test('invalid UI values never reach the Host and reset clears overrides atomically', async () => {
   const f = fixture();
   const controller = createSettingsController(f.form);
-  for (const [field, value] of [['thinkingLevel', 'extreme'], ['enhancedThinking', 'false'], ['claudeMode', 'true'], ['weNeedToThinking', 1], ['unlimitedTokens', 'true'], ['brandIntent', 'x'.repeat(201)], ['maxSkillLoads', 3], ['maxFiles', 1.5]]) {
+  for (const [field, value] of [['thinkingLevel', 'extreme'], ['enhancedThinking', 'false'], ['claudeMode', 'true'], ['weNeedToThinking', 1], ['unlimitedTokens', 'true'], ['shellTool', 'true'], ['shellBackend', 'fish'], ['shellPath', 'x'.repeat(1001)], ['wslDistro', 'x'.repeat(101)], ['brandIntent', 'x'.repeat(201)], ['maxSkillLoads', 3], ['maxFiles', 1.5]]) {
     assert.equal(await controller.set(field, value), false);
   }
   assert.equal(f.writes.length, 0);
@@ -359,6 +359,54 @@ test('both native surfaces expose bilingual mode switches, persist choices, and 
   const reopened = pluginFixture(f.form);
   for (const field of ['claudeMode', 'weNeedToThinking', 'unlimitedTokens']) assert.equal(control(reopened.render(), field).props.checked, true);
   reopened.dispose();
+});
+
+test('optional shell starts off, explains native-tool separation, and enables dependent controls only after consent', async () => {
+  const f = fixture();
+  const ui = pluginFixture(f.form);
+  let tree = ui.render();
+  assert.equal(control(tree, 'shellTool').props.checked, false);
+  assert.equal(control(tree, 'shellTool').props.disabled, false);
+  for (const field of ['shellBackend', 'shellPath', 'wslDistro']) assert.equal(control(tree, field).props.disabled, true, field);
+  assert.ok(content(tree).includes(EN.shellHint));
+  assert.equal(content(tree).includes(EN.shellOn), false);
+  control(tree, 'shellTool').props.onChange({ currentTarget: { checked: true } });
+  await tick();
+  assert.deepEqual(f.writes[0], { field: 'shellTool', value: true });
+  tree = ui.render();
+  for (const field of ['shellBackend', 'shellPath', 'wslDistro']) assert.equal(control(tree, field).props.disabled, false, field);
+  assert.ok(content(tree).includes(EN.shellOn));
+  const backend = control(tree, 'shellBackend');
+  assert.deepEqual(backend.children.map(node => node.props.value), ['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd']);
+  assert.equal(backend.children.find(node => node.props.value === 'bash').children[0], EN.shellBash);
+  backend.props.onChange({ currentTarget: { value: 'git-bash' } });
+  await tick();
+  assert.deepEqual(f.writes[1], { field: 'shellBackend', value: 'git-bash' });
+  control(ui.render(), 'shellPath').props.onBlur({ currentTarget: { value: 'C:/Program Files/Git/bin/bash.exe' } });
+  await tick();
+  assert.deepEqual(f.writes[2], { field: 'shellPath', value: 'C:/Program Files/Git/bin/bash.exe' });
+  control(ui.render(), 'wslDistro').props.onBlur({ currentTarget: { value: 'Ubuntu' } });
+  await tick();
+  assert.deepEqual(f.writes[3], { field: 'wslDistro', value: 'Ubuntu' });
+  control(ui.render(), 'shellTool').props.onChange({ currentTarget: { checked: false } });
+  await tick();
+  tree = ui.render();
+  assert.equal(content(tree).includes(EN.shellOn), false);
+  for (const field of ['shellBackend', 'shellPath', 'wslDistro']) assert.equal(control(tree, field).props.disabled, true, field);
+  ui.dispose();
+});
+
+test('older Host profiles migrate legacy bashTool to the shell display default without writing', () => {
+  const previous = { ...defaults(), bashTool: true };
+  delete previous.shellTool;
+  const f = fixture({ status: 'ready', writable: true, value: previous });
+  const controller = createSettingsController(f.form);
+  assert.equal(controller.store.getSnapshot().value.shellTool, true);
+  assert.equal(controller.store.getSnapshot().value.shellBackend, 'auto');
+  assert.equal(controller.store.getSnapshot().value.shellPath, '');
+  assert.equal(controller.store.getSnapshot().value.wslDistro, '');
+  assert.deepEqual(f.writes, []);
+  controller.dispose();
 });
 
 test('English and Chinese copy have the same keys', () => {

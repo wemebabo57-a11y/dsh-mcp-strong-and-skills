@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { boundResult, budgetReport, StrongEngine, BASE_TOOLS, TOOLS, toolsForConfig, buildPolicy } from '../src/engine.mjs';
+import { SHELL_TOOL } from '../src/shell-tool.mjs';
 import { resolveConfig } from '../src/config.mjs';
 import { snapshotConfig } from '../src/native-config.mjs';
 import { POLICY } from '../src/policy.mjs';
@@ -29,11 +30,17 @@ test('profiles enforce hard bounds without hidden model calls', () => {
   assert.ok(new StrongEngine('.') instanceof StrongEngine); // No network or project reads during construction.
 });
 
-test('legacy bashTool is accepted but ignored', () => {
+test('legacy bashTool migrates to the optional shell while explicit shellTool wins', () => {
   const config = resolveConfig({ bashTool: true });
+  assert.equal(config.shellTool, true);
   assert.equal(config.bashTool, undefined);
   assert.equal(config.toolSet, 'expanded');
+  assert.equal(resolveConfig({ bashTool: true, shellTool: false }).shellTool, false);
   assert.throws(() => resolveConfig({ bashTool: 'yes' }), /bashTool/);
+  assert.throws(() => resolveConfig({ shellTool: 'yes' }), /shellTool/);
+  assert.throws(() => resolveConfig({ shellBackend: 'fish' }), /shellBackend/);
+  assert.throws(() => resolveConfig({ shellPath: 'x'.repeat(1001) }), /shellPath/);
+  assert.throws(() => resolveConfig({ wslDistro: 'x'.repeat(101) }), /wslDistro/);
 });
 
 test('expanded and compact budgets account for the active policy and schemas', async () => {
@@ -42,6 +49,11 @@ test('expanded and compact budgets account for the active policy and schemas', a
   const compact = budgetReport(compactOptions);
   assert.deepEqual(toolsForConfig(), TOOLS);
   assert.deepEqual(toolsForConfig(compactOptions), BASE_TOOLS);
+  assert.deepEqual(toolsForConfig({ shellTool: true }), [...TOOLS, SHELL_TOOL]);
+  assert.deepEqual(toolsForConfig({ ...compactOptions, shellTool: true }), [...BASE_TOOLS, SHELL_TOOL]);
+  const withShell = budgetReport({ shellTool: true, shellBackend: 'git-bash' });
+  assert.equal(withShell.residentTools, 5);
+  assert.match(buildPolicy({ shellTool: true, shellBackend: 'git-bash' }), /strong_shell/);
   assert.equal(compact.residentTools, 2);
   assert.equal(compact.policyChars, POLICY.length);
   assert.equal(buildPolicy(compactOptions), POLICY);

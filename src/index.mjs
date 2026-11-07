@@ -1,4 +1,4 @@
-import { StrongEngine, TOOLS, BASE_TOOLS } from './engine.mjs';
+import { StrongEngine, ALL_TOOLS, BASE_TOOLS } from './engine.mjs';
 import { snapshotConfig, loadNativeConfigSchema } from './native-config.mjs';
 import { registerSettingsHost } from './settings-host.mjs';
 import { installNativePolicy } from './native-policy.mjs';
@@ -12,12 +12,12 @@ export function apply(ctx, options = {}) {
   const currentConfig = () => snapshotConfig(options);
   registerSettingsHost(ctx);
   installNativePolicy(ctx, currentConfig);
-  for (const tool of TOOLS) {
+  for (const tool of ALL_TOOLS) {
     ctx.tools.register({
       name: tool.name, description: tool.description, parameters: tool.inputSchema,
       output: { schema: { type: 'object', additionalProperties: true },
         render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
-      isConcurrencySafe: () => true,
+      isConcurrencySafe: () => tool.name !== 'strong_shell',
       async execute(args, execution) {
         execution.signal.throwIfAborted();
         const root = execution.agent
@@ -26,6 +26,10 @@ export function apply(ctx, options = {}) {
         // Resolve caller cwd on each call: session directory changes must take effect.
         return new StrongEngine(root, currentConfig()).call(tool.name, args, { signal: execution.signal });
       },
-    }, BASE_TOOLS.some(base => base.name === tool.name) ? undefined : { when: () => currentConfig().toolSet === 'expanded' });
+    }, BASE_TOOLS.some(base => base.name === tool.name)
+      ? undefined
+      : tool.name === 'strong_shell'
+        ? { when: () => currentConfig().shellTool }
+        : { when: () => currentConfig().toolSet === 'expanded' });
   }
 }
