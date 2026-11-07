@@ -3,7 +3,7 @@ import { parseKnowledgeConfig } from '../src/knowledge-config.mjs';
 export const SETTINGS_ENTRY = 'strong-skills';
 export const SETTINGS_PACKAGE = 'dsh-strong-skills';
 export const SETTINGS_FIELDS = Object.freeze([
-  'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet',
+  'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet', 'bashTool',
   'claudeMode', 'weNeedToThinking', 'unlimitedTokens',
   'profile', 'allowBrandColors', 'brandIntent', 'maxOutputChars', 'maxFiles',
   'maxFileBytes', 'maxSkillLoads',
@@ -32,7 +32,7 @@ const PROFILE_LIMITS = Object.freeze({
 /** Config's optional limit overrides inherit their runtime defaults from the selected profile. */
 function displaySettings(value) {
   if (value === undefined) return undefined;
-  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '' };
+  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, bashTool: false, knowledgeConfig: '' };
   const resolved = { ...value };
   for (const [field, fallback] of Object.entries(defaults)) {
     if (resolved[field] === undefined) resolved[field] = fallback;
@@ -42,7 +42,7 @@ function displaySettings(value) {
 
 export function validateSetting(field, value) {
   if (!SETTINGS_FIELDS.includes(field)) throw new TypeError(`Unknown setting: ${field}`);
-  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens'].includes(field)) {
+  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'bashTool'].includes(field)) {
     if (typeof value !== 'boolean') throw new TypeError(`${field} must be boolean`);
   } else if (field === 'knowledgeConfig') {
     parseKnowledgeConfig(value);

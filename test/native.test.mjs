@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { apply, inject, name, Config } from '../src/index.mjs';
-import { TOOLS, BASE_TOOLS, buildPolicy } from '../src/engine.mjs';
+import { ALL_TOOLS, TOOLS, BASE_TOOLS, buildPolicy } from '../src/engine.mjs';
 import { POLICY } from '../src/policy.mjs';
 import { snapshotConfig } from '../src/native-config.mjs';
 
@@ -38,7 +38,7 @@ async function temporaryWorkspace(t, marker) {
   return root;
 }
 
-test('native plugin registers a dynamic policy and four canonical tools', () => {
+test('native plugin registers a dynamic policy and five canonical tools', () => {
   const { ctx, sections, registrations, conditions, visibleNames } = host();
   apply(ctx);
   assert.equal(name, 'strong-skills');
@@ -49,13 +49,15 @@ test('native plugin registers a dynamic policy and four canonical tools', () => 
   assert.equal(sections[0].interpolate, false);
   assert.equal(typeof sections[0].text, 'function');
   assert.equal(sections[0].text(), buildPolicy());
-  assert.deepEqual([...registrations.keys()], TOOLS.map(tool => tool.name));
+  assert.deepEqual([...registrations.keys()], ALL_TOOLS.map(tool => tool.name));
   assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
   for (const tool of BASE_TOOLS) assert.equal(conditions.get(tool.name), undefined);
+  assert.equal(conditions.get('strong_bash')?.(), false);
+  assert.equal(conditions.get('strong_code')?.(), true);
   for (const definition of registrations.values()) {
     assert.equal(definition.parameters.type, 'object');
     assert.equal(definition.output.schema.type, 'object');
-    assert.equal(definition.isConcurrencySafe({}), true);
+    assert.equal(definition.isConcurrencySafe({}), definition.name !== 'strong_bash');
     const canonical = { skills: [{ id: 'example', content: '中文\n"quoted"' }], truncated: false };
     const rendered = definition.output.render({}, canonical);
     assert.equal(rendered.length, 1);
@@ -63,6 +65,17 @@ test('native plugin registers a dynamic policy and four canonical tools', () => 
     assert.deepEqual(JSON.parse(rendered[0].text), canonical);
     assert.equal(Object.hasOwn(canonical, 'content'), false, 'Rendering must not mutate the canonical value');
   }
+});
+
+test('native bash registration follows the live bashTool switch', () => {
+  const enabled = host();
+  apply(enabled.ctx, { bashTool: true });
+  assert.equal(enabled.visibleNames().includes('strong_bash'), true);
+  assert.equal(enabled.conditions.get('strong_bash')(), true);
+  const disabled = host();
+  apply(disabled.ctx, { bashTool: false });
+  assert.equal(disabled.visibleNames().includes('strong_bash'), false);
+  assert.equal(disabled.conditions.get('strong_bash')(), false);
 });
 
 test('one native registration follows live thinking settings and keeps the base policy when off', () => {

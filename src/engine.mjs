@@ -6,6 +6,7 @@ import { buildEnhancementPolicy, buildUnlimitedPolicy } from './thinking.mjs';
 import { getModelProfile } from './models.mjs';
 import { buildDesignModePolicy, buildThinkingModePolicy, getModeState } from './modes.mjs';
 import { EXTRA_TOOLS, runCodeTool } from './code-tools.mjs';
+import { BASH_TOOL, BASH_POLICY, runBashTool } from './bash-tool.mjs';
 import { Knowledge, projectKnowledgePolicy } from './knowledge.mjs';
 
 export const BASE_TOOLS = Object.freeze([
@@ -26,10 +27,12 @@ export const BASE_TOOLS = Object.freeze([
 ]);
 
 export const TOOLS = Object.freeze([...BASE_TOOLS, ...EXTRA_TOOLS]);
+export const ALL_TOOLS = Object.freeze([...TOOLS, BASH_TOOL]);
 
 export function toolsForConfig(options = {}) {
   const config = resolveConfig(options);
-  return config.unlimitedTokens || config.toolSet === 'expanded' ? TOOLS : BASE_TOOLS;
+  const tools = config.unlimitedTokens || config.toolSet === 'expanded' ? TOOLS : BASE_TOOLS;
+  return config.bashTool ? [...tools, BASH_TOOL] : tools;
 }
 
 export function buildPolicy(options = {}, context = {}) {
@@ -37,6 +40,7 @@ export function buildPolicy(options = {}, context = {}) {
   return [
     POLICY,
     config.toolSet === 'expanded' ? '复杂代码定位可用 strong_code 提取符号、导入与诊断；修改后可用 strong_review 提取差异风险与验证建议。它们提供线索，仍需实际验证。' : '',
+    config.bashTool ? BASH_POLICY : '',
     buildDesignModePolicy(config),
     buildEnhancementPolicy(config, context),
     buildThinkingModePolicy(config, context),
@@ -103,7 +107,9 @@ export class StrongEngine {
         ? ['knowledge', 'project'].includes(args.action)
           ? await new Knowledge(this.workspace.root, this.config).run(args, { signal })
           : await this.workspace.run(args, { signal })
-        : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
+        : name === 'strong_bash'
+          ? await runBashTool(args, { workspace: this.workspace, signal })
+          : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
     signal?.throwIfAborted();
     const knowledge = name === 'strong_context' && ['knowledge', 'project'].includes(args.action);
     return boundResult(value, knowledge ? Math.min(this.config.maxOutputChars, 6000) : this.config.unlimitedTokens ? Number.POSITIVE_INFINITY : this.config.maxOutputChars);

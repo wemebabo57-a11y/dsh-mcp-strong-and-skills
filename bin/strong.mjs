@@ -13,6 +13,7 @@ const HELP = `dsh-strong — DeepSeek Harness 编码增强
           [--path src] [--query keyword] [--start 1] [--limit 80]
   code    --root <项目目录> --action symbols|imports|diagnostics [--path src] [--text 报错]
   review  --root <项目目录> [--path src] [--limit 40]           差异与风险建议
+  bash    --root <项目目录> --command "npm test" [--cwd src]     执行工作区命令（需 --bash on）
   config  --mode native|mcp --root <项目目录> [--profile balanced]  输出 DSH patch
   budget  [--profile lean|balanced|thorough]                     上下文开销估算
 
@@ -20,6 +21,7 @@ const HELP = `dsh-strong — DeepSeek Harness 编码增强
 通用增强选项：--thinking on|off --thinking-level balanced|deep
               --clarification auto|more|few --model auto|deepseek-v4-pro|deepseek-v4.1-flash-1017|generic
               --tools compact|expanded --claude-mode on|off --we-need-to on|off --unlimited on|off
+              --bash on|off（内置 Bash，默认 off）
 
 不写用户配置。config 将可用的绝对路径 patch 打印到 stdout。`;
 
@@ -38,11 +40,12 @@ export function parseArgs(argv) {
 }
 
 function checkOptions(command, options) {
-  const common = ['profile', 'thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited', 'knowledge-file'];
+  const common = ['profile', 'thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited', 'bash', 'knowledge-file'];
   const allowed = {
     serve: ['root', ...common], skill: ['id', 'query', 'limit', ...common],
     inspect: ['root', 'action', 'path', 'query', 'start', 'limit', ...common],
     code: ['root', 'action', 'path', 'text', 'limit', ...common], review: ['root', 'path', 'limit', ...common],
+    bash: ['root', 'command', 'cwd', 'timeout', ...common],
     config: ['mode', 'root', ...common], budget: common, help: [], '--help': [], '-h': [],
   }[command];
   if (!allowed) throw new Error(`Unknown command: ${command}`);
@@ -54,7 +57,7 @@ export function optionsToConfig(options) {
   for (const [flag, field] of [['profile', 'profile'], ['thinking-level', 'thinkingLevel'], ['clarification', 'clarification'], ['model', 'modelPreset'], ['tools', 'toolSet']]) {
     if (options[flag] !== undefined) config[field] = options[flag];
   }
-  for (const [flag, field] of [['thinking', 'enhancedThinking'], ['claude-mode', 'claudeMode'], ['we-need-to', 'weNeedToThinking'], ['unlimited', 'unlimitedTokens']]) {
+  for (const [flag, field] of [['thinking', 'enhancedThinking'], ['claude-mode', 'claudeMode'], ['we-need-to', 'weNeedToThinking'], ['unlimited', 'unlimitedTokens'], ['bash', 'bashTool']]) {
     if (options[flag] === undefined) continue;
     if (!['on', 'off'].includes(options[flag])) throw new Error(`--${flag} must be on or off`);
     config[field] = options[flag] === 'on';
@@ -95,11 +98,18 @@ export async function main(argv = process.argv.slice(2)) {
       process.stdout.write(`- insert:\n    - id: strong-skills\n      name: ${quote(fileURLToPath(new URL('../src/index.mjs', import.meta.url)))}\n      config:\n${Object.entries(fields).map(([key, value]) => `        ${key}: ${quote(value)}`).join('\n')}\n`);
     } else if (options.mode === 'mcp') {
       const args = [resolve(directory, 'bin/strong.mjs'), 'serve', '--root', root, '--profile', budget.profile];
-      for (const key of ['thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited']) if (options[key] !== undefined) args.push(`--${key}`, options[key]);
+      for (const key of ['thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited', 'bash']) if (options[key] !== undefined) args.push(`--${key}`, options[key]);
       if (options['knowledge-file']) args.push('--knowledge-file', resolve(options['knowledge-file']));
       process.stdout.write(`- insert:\n    - id: strong-skills-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: strong\n        transport: stdio\n        command: ${quote(process.execPath)}\n        args: ${quote(args)}\n        cwd: ${quote(root)}\n`);
     } else throw new Error('--mode must be native or mcp');
     return;
+  }
+  if (command === 'bash') {
+    if (!config.bashTool) throw new Error('strong_bash is disabled; pass --bash on');
+    const args = { command: options.command };
+    if (options.cwd !== undefined) args.cwd = options.cwd;
+    if (options.timeout !== undefined) args.timeoutMs = Number(options.timeout);
+    process.stdout.write(JSON.stringify(await new StrongEngine(root, config).call('strong_bash', args), null, 2) + '\n'); return;
   }
   const fields = command === 'review' ? ['path', 'limit'] : command === 'code' ? ['action', 'path', 'text', 'limit'] : ['action', 'path', 'query', 'start', 'limit'];
   const args = Object.fromEntries(fields.filter(key => options[key] !== undefined).map(key => [key, ['start', 'limit'].includes(key) ? Number(options[key]) : options[key]]));

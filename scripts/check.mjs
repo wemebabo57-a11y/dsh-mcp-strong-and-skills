@@ -21,6 +21,8 @@ const pkg = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
 if (pkg.dependencies && Object.keys(pkg.dependencies).length) throw new Error('Runtime must remain dependency-free');
 const budget = budgetReport();
 if (budget.approximateResidentTokens > 1600 || budget.residentTools !== 4) throw new Error('Resident context budget exceeded');
+const bash = budgetReport({ bashTool: true });
+if (bash.residentTools !== 5 || bash.approximateResidentTokens > 1600) throw new Error('Bash tool budget exceeded');
 const compact = budgetReport({ toolSet: 'compact', enhancedThinking: false });
 if (compact.residentTools !== 2 || compact.approximateResidentTokens > 650) throw new Error('Compact mode budget exceeded');
 const unlimited = budgetReport({ profile: 'lean', toolSet: 'compact', enhancedThinking: false, unlimitedTokens: true });

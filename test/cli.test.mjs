@@ -50,6 +50,18 @@ test('CLI enhancement flags and generated patches preserve effective options', (
   assert.equal(run(['budget', '--thinking', 'invalid']).status, 1);
 });
 
+test('CLI bash command requires the explicit opt-in flag and returns structured output', () => {
+  const enabled = run(['bash', '--root', root, '--command', 'echo cli-bash-marker', '--bash', 'on']);
+  assert.equal(enabled.status, 0, enabled.stderr);
+  const result = JSON.parse(enabled.stdout);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /cli-bash-marker/);
+  assert.equal(result.timedOut, false);
+  const disabled = run(['bash', '--root', root, '--command', 'echo nope']);
+  assert.equal(disabled.status, 1);
+  assert.match(disabled.stderr, /disabled; pass --bash on/);
+});
+
 test('invalid CLI usage fails visibly on stderr', () => {
   for (const args of [['serve'], ['config', '--mode', 'wrong', '--root', root], ['skill', '--id', '../debug'], ['inspect', '--root', root, '--action', 'run'], ['budget', '--profile', 'unknown'], ['budget', '--__proto__', 'x'], ['unknown']]) {
     const result = run(args);
