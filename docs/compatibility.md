@@ -2,7 +2,11 @@
 
 Initial contract review on 2026-10-24; updated for v0.3.0 on 2026-10-31 against official upstream source and real DSH 0.2.1-rc.5 components (rc.3-compatible contracts).
 
-## 0.4.0 optional built-in Bash — 2026-11-07
+## 0.5.0 removal of redundant Bash tool — 2026-11-07
+
+Version 0.5.0 removes the `strong_bash` tool introduced in 0.4.0. DSH already exposes native command execution and file editing: `dsh-tool-pwsh` is active on Windows, `dsh-tool-bash` is active on POSIX, and the file tools are always available. Enabling the plugin's extra tool did not grant those capabilities. It also did not change the default shell; on Windows it ran through `cmd.exe`, and it bypassed the native sandbox/approval path. The `bashTool` setting, CLI flag, MCP exposure and native config field were removed. Legacy `bashTool` values are accepted and ignored so existing profiles still load. Verification: 127 automated tests and 12 real rc.3 component checks; no model inference or live network access.
+
+## 0.4.0 optional built-in Bash — 2026-11-07（已在 0.5.0 移除）
 
 The new volatile boolean `bashTool` defaults to false and reuses the existing ConfigForms/native/CLI/MCP configuration path. When enabled, the native plugin registers a fifth tool, `strong_bash`, through a live `when` predicate; MCP lists it only in that case and marks it non-read-only/destructive/open-world; the CLI accepts `--bash on|off` and the dedicated `bash` subcommand requires the flag. Default tool discovery remains four tools.
 
@@ -20,7 +24,7 @@ Verification in this working copy: 126 automated tests; 12 real published rc.3 c
 
 Version 0.3.0 changes the optional we-need-to mode from a model-gated hint into an explicitly selected, all-model behavioral instruction. In 0.2.2 it required both `enhancedThinking` and a current model name containing `deepseek` or 「深度求索」; every other model, and every session with enhanced thinking off, silently ignored the checked switch. That gate was the reported “勾选后没用” defect. `getModeState()` now activates the guidance whenever `weNeedToThinking === true`; model selection is diagnostic only. The policy explicitly asks the model to write “We need to …” as an internal goal, then work through goal, known facts/assumptions, minimum evidence, action, verification, and risk, while allowing the user's language and a short public rationale. This is still prompt guidance: it does not change model weights or guarantee a visible chain of thought.
 
-`unlimitedTokens` is a new volatile boolean, default false, using the same ConfigForms/native/CLI/MCP path. It forces the expanded four-tool surface (plus Bash when its independent switch is on), disables plugin output truncation, expands workspace reads to 5,000 files / 262,144 bytes per file / 5,000 lines, permits up to eight complete skill bodies, and raises `strong_code`/`strong_review` scan budgets. It is independent of `enhancedThinking`; when enhanced thinking is on, it forces the deep level. “Unlimited” means this plugin stops imposing its own savings budgets; it does not create provider context, bypass host permissions, or change billing.
+`unlimitedTokens` is a new volatile boolean, default false, using the same ConfigForms/native/CLI/MCP path. It forces the expanded four-tool surface, disables plugin output truncation, expands workspace reads to 5,000 files / 262,144 bytes per file / 5,000 lines, permits up to eight complete skill bodies, and raises `strong_code`/`strong_review` scan budgets. It is independent of `enhancedThinking`; when enhanced thinking is on, it forces the deep level. “Unlimited” means this plugin stops imposing its own savings budgets; it does not create provider context, bypass host permissions, or change billing.
 
 Verification: **116 automated tests** plus **9 real-host component checks** in `scripts/check-host.mjs`. The host script imports published Cordis, Agent, Scope and SystemPrompt implementations, calls the real `assembleContextFor()` and `installModelSelection()`, and checks the final rendered prompt, current model changes, cross-Agent isolation, live switches, all-model guidance, enhanced-thinking-off behavior, unlimited policy injection, and complete user-prompt precedence. It uses no credentials, user profile, server or model inference. It verifies injection and configuration behavior, not model response quality.
 

@@ -4,8 +4,7 @@ import packageInfo from '../package.json' with { type: 'json' };
 import { parseKnowledgeConfig, librariesForRoot } from './knowledge-config.mjs';
 
 // A small, dependency-free stdio implementation of the negotiated MCP subset.
-// No HTTP listener, sampling, prompts, or subscriptions. The optional shell
-// tool is listed only when the composition explicitly enables bashTool.
+// No HTTP listener, sampling, prompts, subscriptions, or arbitrary command tool.
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_IN_FLIGHT = 16;
@@ -41,7 +40,7 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
     if (params !== undefined && (!params || typeof params !== 'object' || Array.isArray(params))) throw Object.assign(new Error('Parameters must be an object'), { rpcCode: -32602 });
     if (method === 'tools/list') {
       if (params?.cursor !== undefined) throw Object.assign(new Error('This static list has no cursor'), { rpcCode: -32602 });
-      return { tools: tools.map(({ readOnly, ...tool }) => ({ ...tool, annotations: { readOnlyHint: readOnly !== false, destructiveHint: readOnly === false, idempotentHint: readOnly !== false, openWorldHint: readOnly === false || (tool.name === 'strong_context' && remoteKnowledge) } })) };
+      return { tools: tools.map(tool => ({ ...tool, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: tool.name === 'strong_context' && remoteKnowledge } })) };
     }
     if (method === 'tools/call') {
       if (!params || typeof params.name !== 'string' || !tools.some(tool => tool.name === params.name)) throw Object.assign(new Error('Unknown tool'), { rpcCode: -32602 });

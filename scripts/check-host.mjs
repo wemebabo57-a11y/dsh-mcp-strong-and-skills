@@ -94,8 +94,7 @@ try {
   const complete = await ctx.systemPrompt.assemble(assembleContextFor(first.agent));
   assert.equal(renderPrompt(complete), 'An explicit complete prompt', 'The plugin must respect a complete user-owned prompt');
   checks.push('complete user prompts retain host precedence');
-  assert.equal(tools.length, 5);
-  assert.ok(tools.some(tool => tool.name === 'strong_bash'), 'strong_bash must be registered for opt-in use');
+  assert.equal(tools.length, 4);
   console.log(JSON.stringify({ hostVersion: require('@deepseek-ai/dsh-agent/package.json').version, checks, inferenceRequests: 0 }, null, 2));
 } finally {
   for (const dispose of disposers.reverse()) dispose();

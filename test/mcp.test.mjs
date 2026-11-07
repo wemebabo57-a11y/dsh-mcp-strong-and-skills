@@ -89,18 +89,6 @@ test('MCP compact/off removes optional tools and enhancement policy', async t =>
   assert.equal((await c.request(3, 'tools/call', { name: 'strong_code', arguments: { action: 'symbols' } })).error.code, -32602);
 });
 
-test('MCP exposes the optional bash tool only when enabled and marks it destructive', async t => {
-  const c = client(t, 'lean', ['--bash', 'on']);
-  await initialize(c);
-  const listed = await c.request(2, 'tools/list');
-  assert.deepEqual(listed.result.tools.map(tool => tool.name), ['strong_skill', 'strong_context', 'strong_code', 'strong_review', 'strong_bash']);
-  const bash = listed.result.tools.find(tool => tool.name === 'strong_bash');
-  assert.deepEqual(bash.annotations, { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
-  const called = await c.request(3, 'tools/call', { name: 'strong_bash', arguments: { command: 'echo mcp-bash-marker' } });
-  assert.equal(called.result.isError, false);
-  assert.equal(JSON.parse(called.result.content[0].text).stdout.trim(), 'mcp-bash-marker');
-});
-
 test('MCP reads a saved project card and retrieves local knowledge on demand through the same gateway', async t => {
   const parent = await fs.realpath(os.tmpdir()), temporary = await fs.mkdtemp(path.join(parent, 'strong-mcp-knowledge-'));
   t.after(async () => { assert.equal(path.dirname(temporary), parent); assert.ok(path.basename(temporary).startsWith('strong-mcp-knowledge-')); await fs.rm(temporary, { recursive: true, force: true }); });

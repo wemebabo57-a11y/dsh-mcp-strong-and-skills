@@ -29,6 +29,13 @@ test('profiles enforce hard bounds without hidden model calls', () => {
   assert.ok(new StrongEngine('.') instanceof StrongEngine); // No network or project reads during construction.
 });
 
+test('legacy bashTool is accepted but ignored', () => {
+  const config = resolveConfig({ bashTool: true });
+  assert.equal(config.bashTool, undefined);
+  assert.equal(config.toolSet, 'expanded');
+  assert.throws(() => resolveConfig({ bashTool: 'yes' }), /bashTool/);
+});
+
 test('expanded and compact budgets account for the active policy and schemas', async () => {
   const expanded = budgetReport();
   const compactOptions = { toolSet: 'compact', enhancedThinking: false };
