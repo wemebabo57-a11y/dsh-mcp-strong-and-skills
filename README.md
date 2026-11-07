@@ -19,7 +19,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略；需要时可以开启完全不省 token 的无限模式。** 内置 8 个按需技能、4 个默认工具入口、可选的附加 Shell 工具（Windows 优先 Git Bash，也可选 WSL、PowerShell 7 或 cmd）、可关闭的增强思考，以及独立的 stdio MCP 服务。
 
-**0.6.0 提供真正可选的 Shell：** 0.4.0 / 0.5.0 是两次已撤回的尝试，相关发行版与标签均已删除。0.4.0 的 `strong_bash` 在 Windows 实际调用 `cmd.exe`，既不是 Git Bash，也不能切换 shell；0.5.0 直接移除工具，没有解决真正需求。0.6.0 新增默认关闭的 `strong_shell`，可选择 **Git Bash、WSL、POSIX Bash、PowerShell 7 或 cmd**。它是在 DSH 原生工具之外附加的命令通道，不会替换 DSH 默认 shell、原生命令或文件工具；Windows 自动模式优先 Git Bash，让模型直接使用更接近训练语料的 Bash 语法。0.3.1 的项目设定与知识库继续保留。
+**0.4.0-preview.1 提供真正可选的 Shell：** 早先 0.4.0 的 `strong_bash` 尝试和 0.5.0 的移除方案都已撤回，相关发行版与标签已删除。本次按 0.4 主线发布预览版，不直接从 0.3.1 跳到更高版本；稳定后再发布 0.4.0，后续按 0.5.0 继续。新版新增默认关闭的 `strong_shell`，可选择 **Git Bash、WSL、POSIX Bash、PowerShell 7 或 cmd**。它是在 DSH 原生工具之外附加的命令通道，不会替换 DSH 默认 shell、原生命令或文件工具；Windows 自动模式优先 Git Bash，让模型直接使用更接近训练语料的 Bash 语法。0.3.1 的项目设定与知识库继续保留。
 
 **保留 0.3.0 的功能更新：**
 - **修复 we need to 思维**：旧版只有在模型名含 `deepseek` 且增强思考开启时才注入，其他模型或关闭增强思考后勾选确实没有效果。现在只取决于该开关，所有模型、增强思考关闭时都生效，并明确要求先写下 `We need to …` 目标，再展开证据、行动与验证。
@@ -38,7 +38,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 保存的是来源登记，首次工具调用才访问资料。默认只列目录，检索小量带来源、路径、行号的命中，再定向读片段；无限模式下知识结果仍最多 6000 字符。卡片占用少量常驻上下文，源码变化后请更新。[教程与 CLI/MCP 配置](docs/knowledge.md)。
 
-0.6.0 的发行说明与安装包见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.6.0)，也可按下文直接从仓库安装。
+0.4 预览版的发行说明与安装包见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.4.0-preview.1)，也可按下文直接从仓库安装。
 
 ## 快速开始
 
@@ -66,7 +66,7 @@ dsh --profile web
 需要固定版本时，可在仓库来源后追加发布标签或提交 SHA：
 
 ```sh
-dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.6.0
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.4.0-preview.1
 ```
 
 卸载时使用包名，然后重启对应 profile：
