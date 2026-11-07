@@ -37,6 +37,7 @@ test('optional shell metadata and policy are explicit about backend and native-t
   await assert.rejects(resolveShell({ backend: 'fish' }), error => error.code === 'INVALID_SHELL_BACKEND');
   await assert.rejects(resolveShell({ backend: 'auto', executable: 'bash' }), error => error.code === 'SHELL_UNAVAILABLE');
   await assert.rejects(resolveShell({ backend: shell.backend === 'wsl' ? 'pwsh' : 'wsl', executable: shell.executable }), error => error.code === 'SHELL_UNAVAILABLE');
+  await assert.rejects(resolveShell({ backend: shell.backend === 'cmd' ? 'pwsh' : 'cmd', executable: shell.executable }), error => error.code === 'SHELL_UNAVAILABLE');
 });
 
 test('runs a real command with its exit code, streams, and confined relative cwd', async t => {

@@ -36,9 +36,10 @@ export async function resolveShell({ backend = 'auto', executable = '', wslDistr
   const distro = typeof wslDistro === 'string' ? wslDistro.trim() : '';
   if (explicit) {
     if (!path.isAbsolute(explicit)) throw new WorkspaceError('SHELL_UNAVAILABLE', 'shellPath 必须是绝对路径。');
-    const inferred = backend === 'auto' ? inferBackend(explicit, platform) : backend;
-    if (!inferred) throw new WorkspaceError('SHELL_UNAVAILABLE', 'shellPath 需要指向 bash、pwsh、cmd 或 wsl 可执行文件。');
-    if (backend !== 'auto' && inferred !== backend) throw new WorkspaceError('SHELL_UNAVAILABLE', 'shellPath 与 shellBackend 不匹配：' + explicit);
+    const detected = inferBackend(explicit, platform);
+    if (!detected) throw new WorkspaceError('SHELL_UNAVAILABLE', 'shellPath 需要指向 bash、pwsh、cmd 或 wsl 可执行文件。');
+    if (backend !== 'auto' && detected !== backend) throw new WorkspaceError('SHELL_UNAVAILABLE', 'shellPath 与 shellBackend 不匹配：' + explicit);
+    const inferred = backend === 'auto' ? detected : backend;
     if (!(await isFile(explicit))) throw new WorkspaceError('SHELL_UNAVAILABLE', '指定的 Shell 可执行文件不存在：' + explicit);
     if (inferred === 'wsl' && !(await wslAvailable(explicit, env))) throw new WorkspaceError('SHELL_UNAVAILABLE', 'WSL 未安装或没有可用发行版。');
     return makeShell(inferred, explicit, { distro });
