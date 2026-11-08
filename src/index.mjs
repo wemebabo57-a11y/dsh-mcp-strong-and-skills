@@ -1,3 +1,5 @@
+import * as fs from 'node:fs/promises';
+import path from 'node:path';
 import { StrongEngine, ALL_TOOLS, BASE_TOOLS } from './engine.mjs';
 import { snapshotConfig, loadNativeConfigSchema } from './native-config.mjs';
 import { registerSettingsHost } from './settings-host.mjs';
@@ -6,6 +8,76 @@ import { installNativePolicy } from './native-policy.mjs';
 export const name = 'strong-skills';
 export const inject = ['tools', 'systemPrompt', 'workingDirectory'];
 export const Config = await loadNativeConfigSchema();
+
+const visionRoutes = new Map();
+
+/** Accepts either a tool-activation context or a tool execution handle. */
+function routeOf(context) {
+  if (context?.modelSelection?.provider) return { provider: context.modelSelection.provider, model: context.modelSelection.model };
+  const header = context?.agent?.session?.requestHeader?.()?.config;
+  const options = context?.agent?.options ?? {};
+  return { provider: header?.provider ?? options.provider, model: header?.model ?? options.model };
+}
+
+/** Cache per route: activation runs on every step and must stay cheap. */
+async function visionCapable(ctx, context) {
+  const { provider, model } = routeOf(context);
+  if (!provider || !model) return false;
+  const key = `${provider}\u0000${model}`;
+  if (visionRoutes.has(key)) return visionRoutes.get(key);
+  try {
+    const llm = ctx.get('llm');
+    const info = await llm.resolveModelInfo(provider, model, context?.signal);
+    const vision = Array.isArray(info?.inputModalities) && info.inputModalities.includes('image');
+    if (visionRoutes.size > 32) visionRoutes.clear();
+    visionRoutes.set(key, vision);
+    return vision;
+  } catch {
+    return false;
+  }
+}
+
+/** Turn a saved screenshot into an image block only when the current route accepts images. */
+async function attachScreenshot(ctx, execution, value) {
+  const image = value && typeof value === 'object' ? value.screenshot : null;
+  if (!image?.path) return { value, blocks: [] };
+  const copy = { ...value };
+  delete copy.screenshot;
+  const blocks = [];
+  let attached = false;
+  if (await visionCapable(ctx, execution)) {
+    try {
+      const attachments = ctx.get('attachments');
+      const data = await fs.readFile(image.path);
+      const ref = await attachments.saveImage({ data, mediaType: image.mediaType ?? 'image/png', name: path.basename(image.path) });
+      blocks.push({ type: 'image', attachment: ref });
+      attached = true;
+    } catch {
+      attached = false;
+    }
+  }
+  copy.image = { path: image.path, width: image.width, height: image.height, attached };
+  if (!attached) copy.imageHint = '当前模型不接受图片输入，只返回截图路径；需要文字请用 strong_web，或换视觉模型。';
+  return { value: copy, blocks };
+}
+
+function expanded(config) { return config.toolSet === 'expanded' || config.unlimitedTokens; }
+
+function registrationOptions(ctx, tool, currentConfig) {
+  if (BASE_TOOLS.some(base => base.name === tool.name)) return undefined;
+  if (tool.name === 'strong_shell') return { when: () => currentConfig().shellTool };
+  if (tool.name === 'strong_web') return { when: () => expanded(currentConfig()) && currentConfig().webTool };
+  if (tool.name === 'strong_browse') return { when: async context => {
+    const config = currentConfig();
+    if (!expanded(config) || config.browseTool === 'off') return false;
+    if (config.browseTool === 'on') return true;
+    // Auto keeps the browser off text-only routes; they use strong_web instead.
+    // A caller without a route cannot answer the question yet, so keep it available.
+    if (context?.modelSelection === undefined) return true;
+    return visionCapable(ctx, context);
+  } };
+  return { when: () => currentConfig().toolSet === 'expanded' };
+}
 
 export function apply(ctx, options = {}) {
   snapshotConfig(options); // Fail invalid composition before contributing anything.
@@ -16,7 +88,7 @@ export function apply(ctx, options = {}) {
     ctx.tools.register({
       name: tool.name, description: tool.description, parameters: tool.inputSchema,
       output: { schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }, ...(value && value._imageBlocks ? value._imageBlocks : [])] },
       isConcurrencySafe: () => tool.name !== 'strong_shell',
       async execute(args, execution) {
         execution.signal.throwIfAborted();
@@ -24,12 +96,14 @@ export function apply(ctx, options = {}) {
           ? await ctx.workingDirectory.ensure(execution.agent, execution.signal)
           : ctx.workingDirectory.defaultDirectory;
         // Resolve caller cwd on each call: session directory changes must take effect.
-        return new StrongEngine(root, currentConfig()).call(tool.name, args, { signal: execution.signal });
+        let value = await new StrongEngine(root, currentConfig()).call(tool.name, args, { signal: execution.signal });
+        if (tool.name === 'strong_browse') {
+          const attached = await attachScreenshot(ctx, execution, value);
+          value = attached.value;
+          if (attached.blocks.length) Object.defineProperty(value, '_imageBlocks', { value: attached.blocks, enumerable: false });
+        }
+        return value;
       },
-    }, BASE_TOOLS.some(base => base.name === tool.name)
-      ? undefined
-      : tool.name === 'strong_shell'
-        ? { when: () => currentConfig().shellTool }
-        : { when: () => currentConfig().toolSet === 'expanded' });
+    }, registrationOptions(ctx, tool, currentConfig));
   }
 }

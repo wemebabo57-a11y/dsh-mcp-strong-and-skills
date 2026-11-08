@@ -4,6 +4,7 @@ export const SETTINGS_ENTRY = 'strong-skills';
 export const SETTINGS_PACKAGE = 'dsh-strong-skills';
 export const SETTINGS_FIELDS = Object.freeze([
   'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet',
+  'webTool', 'browseTool', 'ptcMode', 'browserPath',
   'claudeMode', 'weNeedToThinking', 'unlimitedTokens',
   'shellTool', 'shellBackend', 'shellPath', 'wslDistro',
   'profile', 'allowBrandColors', 'brandIntent', 'maxOutputChars', 'maxFiles',
@@ -16,7 +17,9 @@ const CHOICES = Object.freeze({
   clarification: ['auto', 'more', 'few'],
   modelPreset: ['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'],
   toolSet: ['compact', 'expanded'],
-  shellBackend: ['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd'],
+  shellBackend: ['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd', 'builtin'],
+  browseTool: ['auto', 'on', 'off'],
+  ptcMode: ['auto', 'on', 'off'],
   profile: ['lean', 'balanced', 'thorough'],
 });
 
@@ -34,7 +37,7 @@ const PROFILE_LIMITS = Object.freeze({
 /** Config's optional limit overrides inherit their runtime defaults from the selected profile. */
 function displaySettings(value) {
   if (value === undefined) return undefined;
-  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '' };
+  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '', webTool: true, browseTool: 'auto', ptcMode: 'auto', browserPath: '' };
   if (value.shellTool === undefined && value.bashTool === true) defaults.shellTool = true;
   const resolved = { ...value };
   for (const [field, fallback] of Object.entries(defaults)) {
@@ -45,7 +48,7 @@ function displaySettings(value) {
 
 export function validateSetting(field, value) {
   if (!SETTINGS_FIELDS.includes(field)) throw new TypeError(`Unknown setting: ${field}`);
-  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool'].includes(field)) {
+  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool', 'webTool'].includes(field)) {
     if (typeof value !== 'boolean') throw new TypeError(`${field} must be boolean`);
   } else if (field === 'knowledgeConfig') {
     parseKnowledgeConfig(value);
@@ -55,6 +58,8 @@ export function validateSetting(field, value) {
     if (typeof value !== 'string' || value.length > 1000 || /[\0\r\n]/.test(value)) throw new TypeError('Shell path must be a single-line string up to 1000 characters');
   } else if (field === 'wslDistro') {
     if (typeof value !== 'string' || value.length > 100 || /[\0\r\n]/.test(value)) throw new TypeError('WSL distro must be a single-line string up to 100 characters');
+  } else if (field === 'browserPath') {
+    if (typeof value !== 'string' || value.length > 1000 || /[\0\r\n]/.test(value)) throw new TypeError('Browser path must be a single-line string up to 1000 characters');
   } else if (Object.hasOwn(CHOICES, field)) {
     if (!CHOICES[field].includes(value)) throw new TypeError(`Invalid ${field}`);
   } else {

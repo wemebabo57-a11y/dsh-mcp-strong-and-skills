@@ -50,11 +50,11 @@ test('the checked we need to mode is independent of enhanced thinking and keeps 
   assert.equal(state.weNeedTo.active, true);
   assert.equal(state.weNeedTo.reason, 'active');
   assert.match(buildThinkingModePolicy(config, context), /We need to/);
-  assert.doesNotMatch(buildThinkingModePolicy(config, context), /Claude 风格工作法/);
+  assert.doesNotMatch(buildThinkingModePolicy(config, context), /工作方法：/);
   assert.equal(buildEnhancementPolicy(config, context), '');
   const policy = buildPolicy(config, context);
   assert.match(policy, /We need to/);
-  assert.match(policy, /Claude 风格界面参考/);
+  assert.match(policy, /界面参考（前端任务）/);
   assert.doesNotMatch(policy, /通用增强|一次自审/);
   assert.equal(buildPolicy({ enhancedThinking: false, weNeedToThinking: true }, context), buildPolicy({ enhancedThinking: false }, context) + '\n' + buildThinkingModePolicy({ weNeedToThinking: true }, context));
 });
@@ -63,7 +63,7 @@ test('Claude guidance covers generated frontends and observable work without rep
   const design = buildDesignModePolicy(enabled);
   const thinking = buildThinkingModePolicy({ claudeMode: true });
   assert.match(design, /前端任务/);
-  assert.match(design, /已有品牌和用户要求优先/);
+  assert.match(design, /用户品牌和要求优先/);
   assert.match(design, /键盘/);
   assert.match(design, /对比/);
   assert.match(thinking, /可观察/);

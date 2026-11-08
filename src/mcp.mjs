@@ -44,7 +44,9 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
       if (params?.cursor !== undefined) throw Object.assign(new Error('This static list has no cursor'), { rpcCode: -32602 });
       return { tools: tools.map(tool => ({ ...tool, annotations: tool.name === 'strong_shell'
         ? { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
-        : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: tool.name === 'strong_context' && remoteKnowledge } })) };
+        : tool.name === 'strong_browse'
+          ? { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+          : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: tool.name === 'strong_web' || (tool.name === 'strong_context' && remoteKnowledge) } })) };
     }
     if (method === 'tools/call') {
       if (!params || typeof params.name !== 'string' || !tools.some(tool => tool.name === params.name)) throw Object.assign(new Error('Unknown tool'), { rpcCode: -32602 });

@@ -67,7 +67,7 @@ test('optional shell flags round-trip through executable configuration', () => {
   }
   const budget = run(['budget', ...shellArgs]);
   assert.equal(budget.status, 0, budget.stderr);
-  assert.equal(JSON.parse(budget.stdout).residentTools, 5);
+  assert.equal(JSON.parse(budget.stdout).residentTools, 7);
   const off = run(['config', '--mode', 'native', '--root', root, '--shell', 'off']);
   assert.equal(off.status, 0, off.stderr);
   assert.match(off.stdout, /shellTool: false/);
@@ -112,4 +112,36 @@ test('optional mode flags round-trip through native and MCP configuration withou
     assert.equal(invalid.stdout, '');
     assert.match(invalid.stderr, /must be on or off/);
   }
+});
+
+test('network, browser and PTC flags round-trip without hidden network calls', () => {
+  const args = ['--web', 'off', '--browse', 'off', '--ptc', 'off', '--browser-path', 'C:/Apps/chrome.exe'];
+  const native = run(['config', '--mode', 'native', '--root', root, ...args]);
+  assert.equal(native.status, 0, native.stderr);
+  assert.match(native.stdout, /webTool: false/);
+  assert.match(native.stdout, /browseTool: "off"/);
+  assert.match(native.stdout, /ptcMode: "off"/);
+  assert.match(native.stdout, /browserPath: "C:\/Apps\/chrome\.exe"/);
+  const mcp = run(['config', '--mode', 'mcp', '--root', root, ...args]);
+  assert.equal(mcp.status, 0, mcp.stderr);
+  const mcpArgs = JSON.parse(mcp.stdout.match(/args: (.+)/)[1]);
+  for (const [flag, value] of [['--web', 'off'], ['--browse', 'off'], ['--ptc', 'off'], ['--browser-path', 'C:/Apps/chrome.exe']]) {
+    const index = mcpArgs.lastIndexOf(flag);
+    assert.ok(index >= 0, flag);
+    assert.equal(mcpArgs[index + 1], value);
+  }
+  const budget = run(['budget', '--web', 'off', '--browse', 'off']);
+  assert.equal(budget.status, 0, budget.stderr);
+  assert.equal(JSON.parse(budget.stdout).residentTools, 4);
+  const withoutBrowser = run(['budget', '--web', 'on', '--browse', 'off']);
+  assert.equal(JSON.parse(withoutBrowser.stdout).residentTools, 5);
+  assert.equal(run(['budget', '--web', 'on', '--browse', 'on']).status, 0);
+  for (const flag of ['--browse', '--ptc']) {
+    const invalid = run(['budget', flag, 'always']);
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /auto\|on\|off/);
+  }
+  const invalidWeb = run(['budget', '--web', 'maybe']);
+  assert.equal(invalidWeb.status, 1);
+  assert.match(invalidWeb.stderr, /must be on or off/);
 });

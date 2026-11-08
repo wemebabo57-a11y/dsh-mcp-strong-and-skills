@@ -120,7 +120,7 @@ test('cancelled skill calls never return a successful body', async () => {
 
 test('resident budget contains only the selected tool schemas and zero complete skill bodies', async () => {
   const budget = budgetReport();
-  assert.equal(budget.residentTools, 4);
+  assert.equal(budget.residentTools, 6);
   assert.equal(budget.residentTools, TOOLS.length);
   assert.equal(budget.residentSkillBodies, 0);
   const policy = buildPolicy();

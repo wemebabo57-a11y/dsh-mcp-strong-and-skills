@@ -62,7 +62,7 @@ test('stdio initialize, tool discovery, on-demand skills, resources and bounded 
   assert.deepEqual(init.serverInfo, { name: packageInfo.name, version: packageInfo.version });
   assert.ok(init.instructions.length < 1000);
   const listed = await c.request(2, 'tools/list', {});
-  assert.equal(listed.result.tools.length, 4);
+  assert.equal(listed.result.tools.length, 6);
   assert.equal(JSON.stringify(listed).includes('先理解用户'), false, 'skill bodies stay out of discovery');
   const loaded = await c.request(3, 'tools/call', { name: 'strong_skill', arguments: { query: '修复崩溃错误' } });
   assert.equal(loaded.result.isError, false);
@@ -93,7 +93,7 @@ test('MCP shell tool is opt-in, honestly annotated, and executes a real command'
   const c = client(t, 'lean', ['--shell', 'on']);
   await initialize(c);
   const listed = await c.request(2, 'tools/list');
-  assert.equal(listed.result.tools.length, 5);
+  assert.equal(listed.result.tools.length, 7);
   const shell = listed.result.tools.find(tool => tool.name === 'strong_shell');
   assert.deepEqual(shell.annotations, { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
   const result = await c.request(3, 'tools/call', { name: 'strong_shell', arguments: { command: 'printf shell-mcp' } });
@@ -130,11 +130,11 @@ test('MCP reads a saved project card and retrieves local knowledge on demand thr
 test('MCP mode flags enable Claude guidance and all-model we-need-to guidance', async t => {
   const c = client(t, 'lean', ['--claude-mode', 'on', '--we-need-to', 'on', '--model', 'deepseek-v4-pro']);
   const init = await initialize(c);
-  assert.match(init.instructions, /Claude 风格界面参考/);
-  assert.match(init.instructions, /Claude 风格工作法/);
-  assert.match(init.instructions, /协作目标引导/);
+  assert.match(init.instructions, /界面参考（前端任务）/);
+  assert.match(init.instructions, /工作方法：/);
+  assert.match(init.instructions, /we need to 思维/);
   const listed = await c.request(2, 'tools/list');
-  assert.equal(listed.result.tools.length, 4);
+  assert.equal(listed.result.tools.length, 6);
 });
 
 test('MCP expanded coding tools return real bounded symbols and parsed diagnostics', async t => {

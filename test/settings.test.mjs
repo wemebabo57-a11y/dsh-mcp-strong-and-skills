@@ -377,8 +377,15 @@ test('optional shell starts off, explains native-tool separation, and enables de
   for (const field of ['shellBackend', 'shellPath', 'wslDistro']) assert.equal(control(tree, field).props.disabled, false, field);
   assert.ok(content(tree).includes(EN.shellOn));
   const backend = control(tree, 'shellBackend');
-  assert.deepEqual(backend.children.map(node => node.props.value), ['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd']);
+  assert.deepEqual(backend.children.map(node => node.props.value), ['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd', 'builtin']);
   assert.equal(backend.children.find(node => node.props.value === 'bash').children[0], EN.shellBash);
+  assert.equal(backend.children.find(node => node.props.value === 'builtin').children[0], EN.shellBuiltin);
+  assert.equal(control(tree, 'webTool').props.checked, true);
+  assert.equal(control(tree, 'browseTool').props.value, 'auto');
+  assert.deepEqual(control(tree, 'browseTool').children.map(node => node.props.value), ['auto', 'on', 'off']);
+  assert.equal(control(tree, 'ptcMode').props.value, 'auto');
+  assert.deepEqual(control(tree, 'ptcMode').children.map(node => node.props.value), ['auto', 'on', 'off']);
+  assert.equal(control(tree, 'browserPath').props.defaultValue, '');
   backend.props.onChange({ currentTarget: { value: 'git-bash' } });
   await tick();
   assert.deepEqual(f.writes[1], { field: 'shellBackend', value: 'git-bash' });

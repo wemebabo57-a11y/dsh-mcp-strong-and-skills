@@ -20,13 +20,13 @@ for (const skill of SKILL_CATALOG) {
 const pkg = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
 if (pkg.dependencies && Object.keys(pkg.dependencies).length) throw new Error('Runtime must remain dependency-free');
 const budget = budgetReport();
-if (budget.approximateResidentTokens > 1600 || budget.residentTools !== 4) throw new Error('Resident context budget exceeded');
+if (budget.approximateResidentTokens > 1600 || budget.residentTools !== 6) throw new Error('Resident context budget exceeded');
 const compact = budgetReport({ toolSet: 'compact', enhancedThinking: false });
 if (compact.residentTools !== 2 || compact.approximateResidentTokens > 650) throw new Error('Compact mode budget exceeded');
 const unlimited = budgetReport({ profile: 'lean', toolSet: 'compact', enhancedThinking: false, unlimitedTokens: true });
-if (!unlimited.unlimitedTokens || unlimited.residentTools !== 4 || unlimited.maxResultChars !== 'unlimited' || unlimited.maxFiles !== 5000 || unlimited.maxSkillLoads !== 8) throw new Error('Unlimited mode overrides are incomplete');
+if (!unlimited.unlimitedTokens || unlimited.residentTools !== 6 || unlimited.maxResultChars !== 'unlimited' || unlimited.maxFiles !== 5000 || unlimited.maxSkillLoads !== 8) throw new Error('Unlimited mode overrides are incomplete');
 const shell = budgetReport({ shellTool: true, shellBackend: 'git-bash' });
-if (shell.residentTools !== 5 || shell.approximateResidentTokens > 1600) throw new Error('Optional shell budget is unexpected');
+if (shell.residentTools !== 7 || shell.approximateResidentTokens > 1900) throw new Error('Optional shell budget is unexpected');
 const ui = spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build-ui.mjs', root)), '--check'], { encoding: 'utf8', env: nodeEnv });
 if (ui.status !== 0) throw new Error(ui.stderr || ui.stdout || 'Client bundle check failed');
 process.stdout.write(JSON.stringify({ syntax: 'ok', skills: SKILL_CATALOG.length, budget }, null, 2) + '\n');

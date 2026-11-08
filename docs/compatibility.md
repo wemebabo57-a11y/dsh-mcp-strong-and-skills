@@ -1,6 +1,20 @@
 # DeepSeek Harness compatibility
 
-Initial contract review on 2026-10-24; updated for v0.4.0-preview.1 on 2026-11-07 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
+Initial contract review on 2026-10-24; updated for v0.4.0 on 2026-11-08 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
+
+## 0.4.0 web, headless browser, built-in Bash and PTC — 2026-11-08
+
+Version 0.4.0 keeps the 0.3.1 knowledge tools and the selectable shell, and adds three surfaces. The expanded tool set now registers six entries by default — `strong_skill`, `strong_context`, `strong_code`, `strong_review`, `strong_web`, `strong_browse` — while `strong_shell` remains an explicit seventh entry. Compact mode stays at two entries.
+
+`strong_web` is a plain fetch-based reader, not a browser. `search` posts to DuckDuckGo HTML, falls back to Bing, and returns JSON items with stable aliases (`r1`, `r2`, …), title, URL, domain and snippet. `open` accepts an alias from the per-root cache (10-minute TTL, last 10 queries) or an absolute http(s) URL, and returns title, description, extracted text and up to 40 links. Per-request limits are 15 seconds and 2 MB; non-HTML responses are rejected with an explicit error. Page scripts are not executed.
+
+`strong_browse` discovers a local Chrome, Edge, Brave or Chromium binary (or `browserPath`), launches it with `--headless=new --remote-debugging-port=0 --user-data-dir=<temp>`, and drives it over CDP using Node's global WebSocket. Supported actions are open, snapshot, screenshot, click, type, press, scroll, wait and close. Sessions are per workspace root, serialize actions, and close after three minutes idle. Screenshots are written under the OS temp directory. When the active route reports `image` in `resolveModelInfo(...).inputModalities`, the PNG is saved through `ctx.get('attachments').saveImage(...)` and emitted as an image content block; otherwise only the path and a hint are returned. Registration is gated on that same capability check when `browseTool === 'auto'`; `on` forces registration and `off` disables it.
+
+The new `builtin` shell backend is a JavaScript POSIX-subset interpreter inside the plugin. It supports quoting, variables, `$()`, pipelines, `&&`/`||`/`;`, `>`/`>>`/`<`/`2>`/`1>&2` and globbing, plus built-ins such as echo, cd, pwd, ls, cat, head, tail, grep, wc, mkdir, touch, rm, cp, mv, test/[, env, export, sleep, which, basename and dirname. External programs are resolved through PATH plus PATHEXT and spawned without a second shell. With `shellBackend: 'auto'`, Windows tries Git Bash → WSL → PowerShell 7 → cmd and then falls back to `builtin`; POSIX tries `bash` and then `builtin`, so an OS shell is no longer required. Built-in path resolution rejects escapes from the workspace root; external commands and the command itself still run with the current user's permissions and are not an OS sandbox.
+
+PTC guidance is emitted when `ptcMode` is `on`, or when it is `auto` and the host exposes a `run_code` tool through `ctx.tools.get('run_code')`. It explains that registered tools are code functions, that independent calls can run under `Promise.all`, that results should be narrowed rather than printed whole, and that browser sessions should be closed. Tool schemas remain compact and results stay bounded.
+
+Verification in this working copy: **150 automated tests**, including stub-fetch search parsing/caching, real built-in-shell execution and Windows PATH casing, PTC gating, web/browser registration gates, CLI round-trip and MCP annotations. `node scripts/check.mjs` passes with 6 tools / 1,560 estimated tokens, 2 tools / 632 tokens and 7 tools / 1,886 tokens. A real headless Edge run opened example.com and produced a 1280×900 PNG that was visually checked; live DuckDuckGo search and page open were exercised. No model inference was sent.
 
 ## 0.4.0-preview.1 selectable shell tool — 2026-11-07
 

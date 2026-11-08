@@ -36,13 +36,13 @@ test('unlimited mode overrides compact profiles, exposes every tool and reports 
   assert.equal(config.maxFiles, 5000);
   assert.equal(config.maxFileBytes, 262144);
   assert.equal(config.maxSkillLoads, 8);
-  assert.equal(toolsForConfig(options).length, 4);
+  assert.equal(toolsForConfig(options).length, 6);
   const policy = buildPolicy(options);
   assert.match(policy, /无限 token 模式/);
-  assert.match(policy, /协作目标引导/);
+  assert.match(policy, /we need to 思维/);
   const report = budgetReport(options);
   assert.equal(report.unlimitedTokens, true);
-  assert.equal(report.residentTools, 4);
+  assert.equal(report.residentTools, 6);
   assert.equal(report.maxResultChars, 'unlimited');
   assert.equal(report.maxFiles, 5000);
   assert.equal(report.maxSkillLoads, 8);

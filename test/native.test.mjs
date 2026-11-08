@@ -23,7 +23,11 @@ function host(ensure = async () => { throw new Error('Unexpected directory looku
     } },
     workingDirectory: { ensure, defaultDirectory },
   };
-  const visibleNames = () => [...registrations.keys()].filter(tool => !conditions.get(tool) || conditions.get(tool)());
+  const visibleNames = async () => {
+    const names = [];
+    for (const [tool, condition] of conditions) if (!condition || await condition()) names.push(tool);
+    return names;
+  };
   return { ctx, sections, registrations, conditions, visibleNames };
 }
 
@@ -39,7 +43,7 @@ async function temporaryWorkspace(t, marker) {
   return root;
 }
 
-test('native plugin registers a dynamic policy and every canonical tool', () => {
+test('native plugin registers a dynamic policy and every canonical tool', async () => {
   const { ctx, sections, registrations, conditions, visibleNames } = host();
   apply(ctx);
   assert.equal(name, 'strong-skills');
@@ -51,7 +55,7 @@ test('native plugin registers a dynamic policy and every canonical tool', () => 
   assert.equal(typeof sections[0].text, 'function');
   assert.equal(sections[0].text(), buildPolicy());
   assert.deepEqual([...registrations.keys()], ALL_TOOLS.map(tool => tool.name));
-  assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
+  assert.deepEqual(await visibleNames(), TOOLS.map(tool => tool.name));
   for (const tool of BASE_TOOLS) assert.equal(conditions.get(tool.name), undefined);
   assert.equal(conditions.get('strong_shell')(), false);
   for (const definition of registrations.values()) {
@@ -120,7 +124,7 @@ test('section provider follows saved switches with an explicit model-selection f
   state.weNeedToThinking = true;
   assert.equal(render({ modelSelection: first }), buildPolicy(state, { selection: first }));
   assert.equal(render({ modelSelection: other }), buildPolicy(state, { selection: other }));
-  assert.match(render({ modelSelection: other }), /协作目标引导/);
+  assert.match(render({ modelSelection: other }), /we need to 思维/);
   state.enhancedThinking = false;
   assert.equal(render({ modelSelection: first }), buildPolicy({ enhancedThinking: false, claudeMode: true, weNeedToThinking: true }));
   state.claudeMode = false;
@@ -143,13 +147,13 @@ test('live compact tools disappear from discovery and reject execution until exp
   const first = await code.execute(args, execution);
   assert.ok(JSON.stringify(first).includes('sample'));
   toolSet = 'compact';
-  assert.deepEqual(visibleNames(), BASE_TOOLS.map(tool => tool.name));
+  assert.deepEqual(await visibleNames(), BASE_TOOLS.map(tool => tool.name));
   await assert.rejects(code.execute(args, execution), /Unknown tool/);
   await assert.rejects(registrations.get('strong_review').execute({}, execution), /Unknown tool/);
   const base = await registrations.get('strong_context').execute({ action: 'read', path: 'marker.txt' }, execution);
   assert.equal(base.lines[0].text, 'dynamic tools');
   toolSet = 'expanded';
-  assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
+  assert.deepEqual(await visibleNames(), TOOLS.map(tool => tool.name));
   assert.deepEqual(await code.execute(args, execution), first);
 });
 
@@ -158,9 +162,9 @@ test('live shell setting adds and removes strong_shell without disturbing the to
   const state = { shellTool: false };
   const { ctx, registrations, visibleNames } = host(undefined, root);
   apply(ctx, { shellTool: { get: () => state.shellTool }, shellBackend: 'auto' });
-  assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
+  assert.deepEqual(await visibleNames(), TOOLS.map(tool => tool.name));
   state.shellTool = true;
-  assert.deepEqual(visibleNames(), [...TOOLS.map(tool => tool.name), 'strong_shell']);
+  assert.deepEqual(await visibleNames(), [...TOOLS.map(tool => tool.name), 'strong_shell']);
   const execution = { signal: new AbortController().signal };
   let shellAvailable = true;
   try { await resolveShell({ backend: 'auto' }); } catch { shellAvailable = false; }
@@ -178,10 +182,10 @@ test('unlimited native setting overrides compact discovery and stays live', asyn
   const state = { unlimitedTokens: false };
   const { ctx, sections, visibleNames } = host(undefined, root);
   apply(ctx, { toolSet: 'compact', unlimitedTokens: { get: () => state.unlimitedTokens } });
-  assert.deepEqual(visibleNames(), BASE_TOOLS.map(tool => tool.name));
+  assert.deepEqual(await visibleNames(), BASE_TOOLS.map(tool => tool.name));
   assert.doesNotMatch(sections[0].text(), /无限 token 模式/);
   state.unlimitedTokens = true;
-  assert.deepEqual(visibleNames(), TOOLS.map(tool => tool.name));
+  assert.deepEqual(await visibleNames(), TOOLS.map(tool => tool.name));
   assert.match(sections[0].text(), /无限 token 模式/);
   const schema = TOOLS.find(tool => tool.name === 'strong_context').inputSchema;
   assert.equal(schema.properties.limit.maximum, 5000);

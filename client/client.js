@@ -84,6 +84,7 @@ const SETTINGS_ENTRY = 'strong-skills';
 const SETTINGS_PACKAGE = 'dsh-strong-skills';
 const SETTINGS_FIELDS = Object.freeze([
   'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet',
+  'webTool', 'browseTool', 'ptcMode', 'browserPath',
   'claudeMode', 'weNeedToThinking', 'unlimitedTokens',
   'shellTool', 'shellBackend', 'shellPath', 'wslDistro',
   'profile', 'allowBrandColors', 'brandIntent', 'maxOutputChars', 'maxFiles',
@@ -96,7 +97,9 @@ const CHOICES = Object.freeze({
   clarification: ['auto', 'more', 'few'],
   modelPreset: ['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'],
   toolSet: ['compact', 'expanded'],
-  shellBackend: ['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd'],
+  shellBackend: ['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd', 'builtin'],
+  browseTool: ['auto', 'on', 'off'],
+  ptcMode: ['auto', 'on', 'off'],
   profile: ['lean', 'balanced', 'thorough'],
 });
 
@@ -114,7 +117,7 @@ const PROFILE_LIMITS = Object.freeze({
 /** Config's optional limit overrides inherit their runtime defaults from the selected profile. */
 function displaySettings(value) {
   if (value === undefined) return undefined;
-  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '' };
+  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '', webTool: true, browseTool: 'auto', ptcMode: 'auto', browserPath: '' };
   if (value.shellTool === undefined && value.bashTool === true) defaults.shellTool = true;
   const resolved = { ...value };
   for (const [field, fallback] of Object.entries(defaults)) {
@@ -125,7 +128,7 @@ function displaySettings(value) {
 
 function validateSetting(field, value) {
   if (!SETTINGS_FIELDS.includes(field)) throw new TypeError(`Unknown setting: ${field}`);
-  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool'].includes(field)) {
+  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool', 'webTool'].includes(field)) {
     if (typeof value !== 'boolean') throw new TypeError(`${field} must be boolean`);
   } else if (field === 'knowledgeConfig') {
     parseKnowledgeConfig(value);
@@ -135,6 +138,8 @@ function validateSetting(field, value) {
     if (typeof value !== 'string' || value.length > 1000 || /[\0\r\n]/.test(value)) throw new TypeError('Shell path must be a single-line string up to 1000 characters');
   } else if (field === 'wslDistro') {
     if (typeof value !== 'string' || value.length > 100 || /[\0\r\n]/.test(value)) throw new TypeError('WSL distro must be a single-line string up to 100 characters');
+  } else if (field === 'browserPath') {
+    if (typeof value !== 'string' || value.length > 1000 || /[\0\r\n]/.test(value)) throw new TypeError('Browser path must be a single-line string up to 1000 characters');
   } else if (Object.hasOwn(CHOICES, field)) {
     if (!CHOICES[field].includes(value)) throw new TypeError(`Invalid ${field}`);
   } else {
@@ -345,13 +350,20 @@ const EN = Object.freeze({
   pro: 'DeepSeek V4 Pro', flash: 'DeepSeek V4.1 Flash · 1017', generic: 'Universal',
   modelNote: 'Automatic uses specialized guidance for supported DeepSeek models and universal enhancements for all others. Choose the actual model and provider reasoning settings in Settings → Models. The Flash strategy follows the rolling deepseek-flash API model.',
   tools: 'Tool set', toolsHint: 'Expanded adds navigation and inspection tools; compact keeps the core tools.', compact: 'Compact', expanded: 'Expanded',
-  shell: 'Additional shell tool', shellHint: 'An optional extra tool that adds Git Bash, WSL Bash, POSIX Bash, PowerShell, or cmd. It does not replace DSH’s default shell or change native command and file tools.',
+  network: 'Web and browser tools', networkHint: 'Compact mode omits both; expanded mode adds them. Browser screenshots are only shown to vision models.',
+  webTool: 'Web search tool', webToolHint: 'Adds strong_web: search returns a short JSON list of ids, titles, links, and snippets; open reads a page by id or URL without launching a browser.',
+  browseTool: 'Browser tool', browseToolHint: 'Adds strong_browse: a real headless Chrome/Edge with no visible window. Vision models can see screenshots; text models should use strong_web.',
+  browseAuto: 'Automatic (vision models only)', browseOn: 'Always on', browseOff: 'Off',
+  ptcMode: 'PTC guidance', ptcModeHint: 'Adds short guidance for calling tools inside run_code: parallel reads, selected fields only, close the browser when done. Automatic detects run_code.',
+  ptcOn: 'Always on', ptcOff: 'Off',
+  browserPath: 'Browser executable (optional)', browserPathHint: 'Absolute path to chrome.exe, msedge.exe, or brave.exe. Leave empty to detect automatically.',
+  shell: 'Additional shell tool', shellHint: 'An optional extra tool for Git Bash, WSL Bash, POSIX Bash, PowerShell, cmd, or the plugin’s built-in Bash. It does not replace DSH’s default shell or change native command and file tools.',
   shellEnable: 'Enable shell tool', shellEnableHint: 'Adds strong_shell. The working directory starts inside this project, but commands run with your user permissions, can access paths outside it, and do not use the DSH native sandbox or approval flow.',
-  shellBackend: 'Shell backend', shellBackendHint: 'Automatic prefers Git Bash on Windows, then WSL, PowerShell, and cmd. macOS and Linux use Bash.',
+  shellBackend: 'Shell backend', shellBackendHint: 'Automatic prefers Git Bash on Windows, then WSL, PowerShell, and cmd, and falls back to the built-in Bash. macOS and Linux use Bash, then the built-in Bash.',
   shellPath: 'Executable path (optional)', shellPathHint: 'Absolute path to bash.exe, pwsh.exe, cmd.exe, or wsl.exe. Leave empty to detect automatically.',
   wslDistro: 'WSL distribution (optional)', wslDistroHint: 'Distribution name such as Ubuntu. Leave empty to use the default distribution.',
   shellOn: 'Shell tool is on: this adds an extra command path beyond the DSH native tool policy. Native tools are unchanged; enable it only if you accept commands running with your user permissions.',
-  shellAuto: 'Automatic', shellGitBash: 'Git Bash', shellBash: 'POSIX Bash', shellWsl: 'WSL Bash', shellPwsh: 'PowerShell', shellCmd: 'cmd.exe',
+  shellAuto: 'Automatic', shellGitBash: 'Git Bash', shellBash: 'POSIX Bash', shellWsl: 'WSL Bash', shellPwsh: 'PowerShell', shellCmd: 'cmd.exe', shellBuiltin: 'Built-in Bash',
   modes: 'Working modes', modesHint: 'Optional guidance; all modes start off and can be combined.',
   claudeMode: 'Claude mode', claudeModeHint: 'For every model: frontend inspiration from warm neutrals, clear hierarchy, whitespace, and restrained accents; task guidance follows goals, evidence, and verification. Your project’s brand comes first.',
   weNeedToThinking: 'we need to thinking', weNeedToThinkingHint: 'For every model: asks the model to open its thinking with a “We need to …” goal statement, then move through facts, evidence, action, verification, and risks. Works with any provider or model name.',
@@ -383,13 +395,20 @@ const ZH = Object.freeze({
   model: '模型策略', modelHint: '所有模型均有通用增强，DeepSeek 可选专用指导；不切换实际模型。', pro: 'DeepSeek V4 Pro', flash: 'DeepSeek V4.1 Flash · 1017', generic: '通用增强',
   modelNote: '「自动」为支持的 DeepSeek 模型应用专用指导，其他模型保留全部通用增强。实际模型及推理参数请在「设置 → 模型」中选择。Flash 策略对应滚动更新的 deepseek-flash API 模型。',
   tools: '工具集', toolsHint: '扩展模式增加导航与检查工具；精简模式保留核心工具。', compact: '精简', expanded: '扩展',
-  shell: '附加 Shell 工具', shellHint: '可选的额外工具，支持 Git Bash、WSL Bash、POSIX Bash、PowerShell 或 cmd；不会替换 DSH 默认 shell，也不改变原生命令与文件工具。',
+  network: '联网与浏览器', networkHint: '精简模式不加载这两个工具，扩展模式才加入；截图只给视觉模型看。',
+  webTool: '联网检索工具', webToolHint: '增加 strong_web：search 返回带 id、标题、网址和摘要的短 JSON；open 用 id 或网址读正文，不启动浏览器。',
+  browseTool: '浏览器工具', browseToolHint: '增加 strong_browse：真实的无头 Chrome/Edge，不显示窗口。视觉模型能直接看截图；文本模型请用 strong_web。',
+  browseAuto: '自动（仅视觉模型）', browseOn: '始终开启', browseOff: '关闭',
+  ptcMode: 'PTC 引导', ptcModeHint: '宿主在 run_code 里调用工具时附加简短指导：并行读取、只取需要的字段、用完关闭浏览器。「自动」会检测 run_code。',
+  ptcOn: '始终开启', ptcOff: '关闭',
+  browserPath: '浏览器路径（可选）', browserPathHint: 'chrome.exe、msedge.exe 或 brave.exe 的绝对路径；留空自动探测。',
+  shell: '附加 Shell 工具', shellHint: '可选的额外工具，支持 Git Bash、WSL Bash、POSIX Bash、PowerShell、cmd，以及插件自带的内置 Bash；不会替换 DSH 默认 shell，也不改变原生命令与文件工具。',
   shellEnable: '启用附加 Shell 工具', shellEnableHint: '增加 strong_shell。工作目录从当前项目内开始，但命令以当前用户权限运行，可访问项目外文件，且不经过 DSH 原生沙箱或审批流程。',
-  shellBackend: 'Shell 后端', shellBackendHint: '自动模式在 Windows 优先 Git Bash，其次 WSL、PowerShell、cmd；macOS 与 Linux 使用 Bash。',
+  shellBackend: 'Shell 后端', shellBackendHint: '自动模式在 Windows 优先 Git Bash，其次 WSL、PowerShell、cmd，最后回退到内置 Bash；macOS 与 Linux 先用 Bash，再用内置 Bash。',
   shellPath: '可执行文件路径（可选）', shellPathHint: 'bash.exe、pwsh.exe、cmd.exe 或 wsl.exe 的绝对路径；留空自动探测。',
   wslDistro: 'WSL 发行版（可选）', wslDistroHint: '如 Ubuntu；留空使用默认发行版。',
   shellOn: 'Shell 工具已开启：这是在 DSH 原生工具策略之外增加的额外命令通道；原生工具保持不变。请仅在接受命令以当前用户权限运行的情况下开启。',
-  shellAuto: '自动', shellGitBash: 'Git Bash', shellBash: 'POSIX Bash', shellWsl: 'WSL Bash', shellPwsh: 'PowerShell', shellCmd: 'cmd.exe',
+  shellAuto: '自动', shellGitBash: 'Git Bash', shellBash: 'POSIX Bash', shellWsl: 'WSL Bash', shellPwsh: 'PowerShell', shellCmd: 'cmd.exe', shellBuiltin: '内置 Bash',
   modes: '工作模式', modesHint: '按需开启，所有模式默认关闭，可同时使用。',
   claudeMode: 'Claude 模式', claudeModeHint: '适用于所有模型：前端参考暖中性色、清晰层级、留白与克制的强调色；解题从目标、证据到验证展开。优先尊重项目品牌。',
   weNeedToThinking: 'we need to 思维', weNeedToThinkingHint: '对所有模型生效：思考开头先写“We need to …”明确目标，再按事实、证据、行动、验证与风险展开；不依赖模型名称或服务商。',
@@ -489,10 +508,17 @@ function createSettingsSection(h) {
         h('p', { className: 'strong-settings__hint' }, t('modelNote')),
         select('toolSet', 'tools', 'toolsHint', [['compact', 'compact'], ['expanded', 'expanded']])),
       h('div', { className: 'strong-settings__group' },
+        h('h3', null, t('network')),
+        h('p', { className: 'strong-settings__hint' }, t('networkHint')),
+        toggle('webTool', 'webTool', 'webToolHint'),
+        select('browseTool', 'browseTool', 'browseToolHint', [['auto', 'browseAuto'], ['on', 'browseOn'], ['off', 'browseOff']]),
+        select('ptcMode', 'ptcMode', 'ptcModeHint', [['auto', 'auto'], ['on', 'ptcOn'], ['off', 'ptcOff']]),
+        text('browserPath', 'browserPath', 'browserPathHint', 1000, 'C:/Program Files/Google/Chrome/Application/chrome.exe')),
+      h('div', { className: 'strong-settings__group' },
         h('h3', null, t('shell')),
         h('p', { className: 'strong-settings__hint' }, t('shellHint')),
         toggle('shellTool', 'shellEnable', 'shellEnableHint'),
-        select('shellBackend', 'shellBackend', 'shellBackendHint', [['auto', 'shellAuto'], ['git-bash', 'shellGitBash'], ['wsl', 'shellWsl'], ['bash', 'shellBash'], ['pwsh', 'shellPwsh'], ['cmd', 'shellCmd']], disabled || !value.shellTool),
+        select('shellBackend', 'shellBackend', 'shellBackendHint', [['auto', 'shellAuto'], ['git-bash', 'shellGitBash'], ['wsl', 'shellWsl'], ['bash', 'shellBash'], ['pwsh', 'shellPwsh'], ['cmd', 'shellCmd'], ['builtin', 'shellBuiltin']], disabled || !value.shellTool),
         text('shellPath', 'shellPath', 'shellPathHint', 1000, 'C:/Program Files/Git/bin/bash.exe', disabled || !value.shellTool),
         text('wslDistro', 'wslDistro', 'wslDistroHint', 100, 'Ubuntu', disabled || !value.shellTool),
         value.shellTool ? h('p', { className: 'strong-settings__notice', role: 'status' }, t('shellOn')) : null),

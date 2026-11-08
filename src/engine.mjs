@@ -6,6 +6,9 @@ import { buildEnhancementPolicy, buildUnlimitedPolicy } from './thinking.mjs';
 import { getModelProfile } from './models.mjs';
 import { buildDesignModePolicy, buildThinkingModePolicy, getModeState } from './modes.mjs';
 import { EXTRA_TOOLS, runCodeTool } from './code-tools.mjs';
+import { WEB_TOOL, runWebTool } from './web-tools.mjs';
+import { BROWSE_TOOL, runBrowseTool } from './browse.mjs';
+import { buildPtcPolicy } from './ptc.mjs';
 import { Knowledge, projectKnowledgePolicy } from './knowledge.mjs';
 import { SHELL_TOOL, buildShellPolicy, runShellTool } from './shell-tool.mjs';
 
@@ -26,25 +29,37 @@ export const BASE_TOOLS = Object.freeze([
     }, required: ['action'], additionalProperties: false } },
 ]);
 
-export const TOOLS = Object.freeze([...BASE_TOOLS, ...EXTRA_TOOLS]);
+export const TOOLS = Object.freeze([...BASE_TOOLS, ...EXTRA_TOOLS, WEB_TOOL, BROWSE_TOOL]);
 export const ALL_TOOLS = Object.freeze([...TOOLS, SHELL_TOOL]);
 
 export function toolsForConfig(options = {}) {
   const config = resolveConfig(options);
-  const tools = config.unlimitedTokens || config.toolSet === 'expanded' ? TOOLS : BASE_TOOLS;
-  return config.shellTool ? [...tools, SHELL_TOOL] : tools;
+  if (!config.unlimitedTokens && config.toolSet !== 'expanded') return config.shellTool ? [...BASE_TOOLS, SHELL_TOOL] : BASE_TOOLS;
+  const tools = [...BASE_TOOLS, ...EXTRA_TOOLS];
+  if (config.webTool) tools.push(WEB_TOOL);
+  if (config.browseTool !== 'off') tools.push(BROWSE_TOOL);
+  if (config.shellTool) tools.push(SHELL_TOOL);
+  return tools;
 }
 
 export function buildPolicy(options = {}, context = {}) {
   const config = resolveConfig(options);
+  const hints = [];
+  if (config.toolSet === 'expanded' || config.unlimitedTokens) {
+    hints.push('代码用 strong_code/strong_review');
+    if (config.webTool) hints.push('联网用 strong_web 先 search 再 open');
+    if (config.browseTool !== 'off') hints.push('真实页面用 strong_browse');
+  }
+  const toolHint = hints.length ? `${hints.join('；')}。线索仍需实际验证。` : '';
   return [
     POLICY,
-    config.toolSet === 'expanded' ? '复杂代码定位可用 strong_code 提取符号、导入与诊断；修改后可用 strong_review 提取差异风险与验证建议。它们提供线索，仍需实际验证。' : '',
+    toolHint,
     config.shellTool ? buildShellPolicy(config) : '',
     buildDesignModePolicy(config),
     buildEnhancementPolicy(config, context),
     buildThinkingModePolicy(config, context),
     buildUnlimitedPolicy(config),
+    buildPtcPolicy(config, { available: Boolean(context.ptcAvailable) }),
     projectKnowledgePolicy(config, context.root),
   ].filter(Boolean).join('\n');
 }
@@ -109,7 +124,11 @@ export class StrongEngine {
           : await this.workspace.run(args, { signal })
         : name === 'strong_shell'
           ? await runShellTool(args, { root: this.workspace.root, config: this.config, signal })
-          : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
+          : name === 'strong_web'
+            ? await runWebTool(args, { root: this.workspace.root, signal })
+            : name === 'strong_browse'
+              ? await runBrowseTool(args, { root: this.workspace.root, config: this.config, signal })
+              : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
     signal?.throwIfAborted();
     const knowledge = name === 'strong_context' && ['knowledge', 'project'].includes(args.action);
     return boundResult(value, knowledge ? Math.min(this.config.maxOutputChars, 6000) : this.config.unlimitedTokens ? Number.POSITIVE_INFINITY : this.config.maxOutputChars);
@@ -123,6 +142,7 @@ export function budgetReport(options = {}, context = {}) {
   return { profile: config.profile, toolSet: config.toolSet, residentTools: toolsForConfig(config).length, residentSkillBodies: 0,
     enhancedThinking: config.enhancedThinking, thinkingLevel: config.thinkingLevel, clarification: config.clarification,
     unlimitedTokens: config.unlimitedTokens,
+    webTool: config.webTool, browseTool: config.browseTool, ptcMode: config.ptcMode,
     modes: getModeState(config, context),
     modelProfile: getModelProfile(context.selection ?? context.modelId, config), nativeReasoning: 'host-controlled',
     policyChars: policy.length, toolSchemaChars: toolText.length,

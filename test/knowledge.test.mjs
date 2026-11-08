@@ -90,7 +90,7 @@ test('project cards are directory-specific, available in every fresh prompt, and
   settings.libraries[0].location = '/does-not-exist';
   assert.doesNotThrow(() => buildPolicy({ knowledgeConfig: JSON.stringify(settings) }, { root: paths.a }));
   assert.equal((await new StrongEngine(paths.a, config).call('strong_context', { action: 'project' })).project.name, 'A');
-  assert.equal(budgetReport(config, { root: paths.a }).residentTools, 4);
+  assert.equal(budgetReport(config, { root: paths.a }).residentTools, 6);
 });
 
 test('knowledge results retain their own small budget even when unlimited mode is enabled', async t => {

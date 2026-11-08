@@ -1,5 +1,19 @@
 # 更新记录
 
+## 0.4.0 — 2026-11-08（正式版）
+
+包版本：`0.4.0`。
+
+- **提示词工程重写**：通用增强、澄清策略、Pro/Flash 策略、深度检查、Claude 模式与 we need to 思维改用短句和常见词，删除重复要求与长定语，保留原有工作流、证据、自审与汇报边界。常驻提示词更短、更好读。
+- **新增 `strong_web`（默认开启，扩展工具集）**：不启动浏览器的联网入口。`search` 返回 JSON 结果列表（`id`、标题、网址、域名、摘要），模型可挑选后用 `open` 按 `id` 或网址读正文、描述与前 40 条链接。DuckDuckGo HTML 搜索失败时回退 Bing；最近 10 次查询缓存 10 分钟；单页 2 MB、15 秒超时。
+- **新增 `strong_browse`（视觉模型）**：用本机 Chrome/Edge/Brave 的 headless 模式与 CDP 驱动，后台运行、不显示窗口。支持 `open`、`snapshot`、`screenshot`、`click`、`type`、`press`、`scroll`、`wait`、`close`。截图保存到临时目录，并在模型支持图片输入时作为 image 内容返回；文本模型只得到路径与提示。`auto` 只给视觉路由注册，`on` 强制，`off` 关闭；`browserPath` 可指定浏览器路径。每个项目一个会话，动作串行，空闲 3 分钟关闭。
+- **插件内置 Bash（`shellBackend: "builtin"`）**：插件内的 JavaScript POSIX 子集解释器，不要求系统已经安装 Bash。支持引号、变量、`$()`、管道、`&&`、`||`、`;`、`>`、`>>`、`<`、`2>`、`1>&2` 与通配符；内置 `echo`、`cd`、`pwd`、`ls`、`cat`、`head`、`tail`、`grep`、`wc`、`mkdir`、`touch`、`rm`、`cp`、`mv`、`test`/`[`、`env`、`export`、`sleep`、`which`、`basename`、`dirname` 等；外部程序按 PATH 直接启动，不再经过第二层 shell。`auto` 在 Windows 依次尝试 Git Bash → WSL → PowerShell 7 → cmd，最后落到内置 Bash；POSIX 先找 `bash`，再落到内置 Bash。其他后端行为不变。
+- **PTC 模式优化**：新增 PTC 指导，说明工具就是 `run_code` 里的代码函数、独立查询用 `Promise.all` 并行、只返回筛选字段或短摘要、不要打印整份 JSON、浏览器用完 `close`、截图只在需要看页面时使用。DSH 暴露 `run_code` 时自动注入；`ptcMode` 支持 `auto`、`on`、`off`。新工具 schema 保持紧凑，结果有明确上限。
+- **设置、CLI 与 MCP 全链路**：设置页新增联网开关、浏览器 auto/on/off、PTC auto/on/off、浏览器路径，Shell 后端下拉加入「内置 Bash」；CLI 新增 `--web`、`--browse`、`--ptc`、`--browser-path`；MCP 将 `strong_web` / `strong_browse` 标记为开放世界，`strong_shell` 继续标记为非只读、可破坏。
+- **工具面与预算**：扩展模式默认 6 个入口（`strong_skill`、`strong_context`、`strong_code`、`strong_review`、`strong_web`、`strong_browse`），开启附加 Shell 后为 7 个；精简模式仍为 2 个。默认估算 1,560 tokens，精简 + 关闭增强思考 632 tokens，附加 Shell 1,886 tokens，均在静态预算门禁内。
+- **兼容保留**：0.3.1 的项目设定与知识库、6000 字符知识预算、8 个按需技能、无限 token 模式、Claude 模式与 we need to 思维继续工作；旧 `bashTool` 继续迁移为 `shellTool`；运行时依赖仍为 0。
+- 150 项自动化测试与静态预算检查通过；真实无头 Edge 页面与 1280×900 截图、真实 DuckDuckGo 搜索与正文打开已验证。开发过程中未发送模型生成请求。
+
 ## 0.4.0-preview.1 — 2026-11-07（0.4 预览版）
 
 - **版本号校正**：本次功能以 0.4 线的预览版发布，不从 0.3.1 跳到更高版本；稳定后再发布 0.4.0，后续按 0.5.0 正常推进。
@@ -23,7 +37,7 @@
 - 工具面恢复为 4 个；旧 profile 中残留的 `bashTool` 会被接受但忽略，避免升级后配置加载失败。
 - 127 项自动化测试通过；未发送模型生成请求。
 
-## 0.4.0 — 2026-11-07（已撤回，未作为正式版本发布）
+## 0.4.0 早期尝试 — 2026-11-07（已撤回，未作为正式版本发布）
 
 > 本版 `strong_bash` 在 Windows 实际调用 `cmd.exe`，不能选择 Git Bash/WSL，也不改变 DSH 默认 shell；其发行版与标签已删除。0.4.0-preview.1 以可选多后端 `strong_shell` 取代本版方案，以下保留原始记录。
 

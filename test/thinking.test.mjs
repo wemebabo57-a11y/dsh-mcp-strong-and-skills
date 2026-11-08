@@ -57,9 +57,9 @@ test('model policies adapt per call and never retain a previous model', () => {
   const pro = buildEnhancementPolicy({}, { selection: { model: 'deepseek-v4-pro' } });
   const flash = buildEnhancementPolicy({}, { modelId: 'deepseek-flash' });
   const generic = buildEnhancementPolicy();
-  assert.match(pro, /最多两个可行方案/);
+  assert.match(pro, /对比最多两个方案/);
   assert.doesNotMatch(pro, /Flash：/);
-  assert.match(flash, /可验证小步/);
+  assert.match(flash, /可验证的小步/);
   assert.doesNotMatch(flash, /Pro：/);
   assert.doesNotMatch(generic, /Pro：|Flash：/);
   assert.equal(buildEnhancementPolicy({}, { selection: { model: 'deepseek-v4-pro' } }), pro);
@@ -99,9 +99,9 @@ test('off removes every added thinking, planning and clarification instruction',
 
 test('enhancement uses bounded review and material questions without demanding internal reasoning', () => {
   const normal = buildEnhancementPolicy();
-  assert.match(normal, /简单任务直接实施/);
+  assert.match(normal, /简单任务直接做/);
   assert.match(normal, /会改变实现/);
-  assert.match(normal, /1–3个关键问题/);
+  assert.match(normal, /1–3 个关键问题/);
   assert.match(normal, /一次自审/);
   assert.match(normal, /已有答案不重复问/);
   assert.match(normal, /不逐字复述内部推理/);
