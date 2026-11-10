@@ -9,7 +9,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 [![CI](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-cb603f?style=flat-square)](LICENSE)
 [![Runtime dependencies: 0](https://img.shields.io/badge/runtime_dependencies-0-242720?style=flat-square)](package.json)
-[![Tests: 164](https://img.shields.io/badge/tests-164-6d7950?style=flat-square)](test)
+[![Tests: 168](https://img.shields.io/badge/tests-168-6d7950?style=flat-square)](test)
 
 [快速开始](#快速开始) · [插件设置](#插件设置) · [三种增强模式](#三种增强模式) · [能力一览](#能力一览) · [MCP 接入](#mcp-接入) · [上下文预算](#上下文预算)
 
@@ -19,7 +19,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略；需要时可以开启完全不省 token 的无限模式。** 内置 8 个按需技能、6 个默认工具入口（含联网搜索与真实后台浏览器）、可选的附加 Shell 工具（Windows 优先 Git Bash，也可选 WSL、PowerShell 7、cmd 或插件内置 Bash）、可关闭的增强思考，以及独立的 stdio MCP 服务。
 
-**0.4.1 维护版聚焦安全、稳定与预算：** 修复 `strong_web` 跨项目缓存串用、SSRF 与超大响应边界，`strong_review` 非 ASCII 路径，`strong_browse` 会话并发与截图临时文件清理；统一工具参数校验与输出预算，补齐 diff scope、search terms/caseSensitive、内置 Shell 文本命令等细节。常驻提示词与工具描述进一步压缩：默认 6 个入口约 1,473 tokens，开启 Shell 后 7 个入口约 1,798 tokens。早先的 `strong_bash` / 0.5.0 尝试已撤回；0.4.0 的 `strong_web`、`strong_browse`、可选 `strong_shell`、内置 Bash、PTC、项目设定与知识库继续保留。
+**0.4.2 维护版修复真实使用中的四个正确性问题：** Bing 搜索的 `ck/a` 跳转会在返回前解包为真实目标，并继续按规范化 URL 去重；`strong_shell` 超时或取消后会在约 750 ms 内强制收尾，不再因只等 `close` 而挂满超时窗口；`strong_browse click` 找不到元素时抛出 `BROWSER_TARGET_MISSING`，不再静默成功；截图输出改用 `WeakMap` 传递图像块，PTC 下不再触发 lossless JSON 序列化错误。工具面、默认开关与预算不变：默认 6 个入口约 1,473 tokens，开启 Shell 后 7 个入口约 1,798 tokens。0.4.1 的安全、生命周期与预算修复继续保留。
 
 **保留 0.3.0 的功能更新：**
 - **修复 we need to 思维**：旧版只有在模型名含 `deepseek` 且增强思考开启时才注入，其他模型或关闭增强思考后勾选确实没有效果。现在只取决于该开关，所有模型、增强思考关闭时都生效，并明确要求先写下 `We need to …` 目标，再展开证据、行动与验证。
@@ -28,7 +28,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 模型继续使用宿主当前 profile 启用的编辑、终端、联网、浏览器与子代理工具。本插件在本地加载技能、检索文件，不在后台发起模型请求。
 
-> **本轮验证：** 164 项自动化测试与静态预算门禁通过；此前已验证的真实无头 Edge 页面、1280×900 PNG、DuckDuckGo 搜索与正文打开继续保留。开发过程中未发送模型生成请求。详见[知识库说明](docs/knowledge.md)与[兼容性记录](docs/compatibility.md)。
+> **本轮验证：** 168 项自动化测试与静态预算门禁通过；真实网络已验证 Bing 搜索返回真实目标并能打开正文，真实 Edge 已验证缺失元素报错与 1280×900 PNG 截图。PTC 截图需安装 0.4.2 后复验；开发过程中未发送模型生成请求。详见[知识库说明](docs/knowledge.md)与[兼容性记录](docs/compatibility.md)。
 
 ## 项目设定与知识库
 
@@ -38,7 +38,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 保存的是来源登记，首次工具调用才访问资料。默认只列目录，检索小量带来源、路径、行号的命中，再定向读片段；无限模式下知识结果仍最多 6000 字符。卡片占用少量常驻上下文，源码变化后请更新。[教程与 CLI/MCP 配置](docs/knowledge.md)。
 
-0.4.1 的发行说明见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.4.1)，也可按下文直接从仓库安装。
+0.4.2 的发行说明见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.4.2)，也可按下文直接从仓库安装。
 
 ## 快速开始
 
@@ -66,7 +66,7 @@ dsh --profile web
 需要固定版本时，可在仓库来源后追加发布标签或提交 SHA：
 
 ```sh
-dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.4.1
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.4.2
 ```
 
 卸载时使用包名，然后重启对应 profile：

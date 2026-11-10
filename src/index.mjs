@@ -11,6 +11,7 @@ export const Config = await loadNativeConfigSchema();
 
 const VISION_TTL = 5 * 60 * 1000;
 const visionRoutes = new Map();
+const screenshotBlocks = new WeakMap();
 
 /** Accepts either a tool-activation context or a tool execution handle. */
 function routeOf(context) {
@@ -109,7 +110,7 @@ export function apply(ctx, options = {}) {
     ctx.tools.register({
       name: tool.name, description: tool.description, parameters: tool.inputSchema,
       output: { schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }, ...(value && value._imageBlocks ? value._imageBlocks : [])] },
+        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }, ...(value && typeof value === 'object' ? screenshotBlocks.get(value) ?? [] : [])] },
       isConcurrencySafe: () => tool.name !== 'strong_shell',
       async execute(args, execution) {
         execution.signal.throwIfAborted();
@@ -121,7 +122,7 @@ export function apply(ctx, options = {}) {
         if (tool.name === 'strong_browse') {
           const attached = await attachScreenshot(ctx, execution, value);
           value = attached.value;
-          if (attached.blocks.length) Object.defineProperty(value, '_imageBlocks', { value: attached.blocks, enumerable: false });
+          if (attached.blocks.length) screenshotBlocks.set(value, attached.blocks);
         }
         return value;
       },

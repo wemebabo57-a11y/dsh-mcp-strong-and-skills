@@ -301,11 +301,11 @@ async function pressKey(cdp, key) {
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
 }
 
-function selectorExpression(selector, text, mode) {
+export function selectorExpression(selector, text, mode) {
   const find = selector
     ? 'document.querySelector(' + JSON.stringify(selector) + ')'
     : '[...document.querySelectorAll("a,button,input,textarea,[role=button]")].find(el => (el.innerText || el.value || el.getAttribute("aria-label") || "").includes(' + JSON.stringify(text ?? '') + '))';
-  if (mode === 'click') return '(' + find + ')?.click(), true';
+  if (mode === 'click') return '(el => { if (!el) return false; el.click(); return true; })(' + find + ')';
   return '(el => { if (!el) return false; el.focus(); if (el.select) el.select(); return true; })(' + find + ')';
 }
 

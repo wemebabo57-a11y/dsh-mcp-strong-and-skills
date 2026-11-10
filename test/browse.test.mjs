@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BROWSE_TOOL, findBrowser, runBrowseTool } from '../src/browse.mjs';
+import vm from 'node:vm';
+import { BROWSE_TOOL, findBrowser, runBrowseTool, selectorExpression } from '../src/browse.mjs';
 
 test('strong_browse schema stays compact and action-oriented', () => {
   assert.equal(BROWSE_TOOL.name, 'strong_browse');
@@ -21,4 +22,13 @@ test('strong_browse handles missing and idle sessions without launching a browse
   assert.match(closed.note, /没有运行中的浏览器/);
   const again = await runBrowseTool({ action: 'close' }, { root: 'no-session-root' });
   assert.match(again.note, /没有运行中的浏览器/);
+});
+
+test('click reports a missing target instead of silently succeeding', () => {
+  const click = document => vm.runInNewContext(selectorExpression('#nope', '', 'click'), { document });
+  assert.equal(click({ querySelector: () => null }), false);
+  let clicks = 0;
+  assert.equal(click({ querySelector: () => ({ click() { clicks += 1; } }) }), true);
+  assert.equal(clicks, 1);
+  assert.equal(vm.runInNewContext(selectorExpression(undefined, 'Nope', 'click'), { document: { querySelectorAll: () => [] } }), false);
 });

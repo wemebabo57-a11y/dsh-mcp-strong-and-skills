@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { apply, inject, name, Config } from '../src/index.mjs';
-import { TOOLS, ALL_TOOLS, BASE_TOOLS, buildPolicy } from '../src/engine.mjs';
+import { StrongEngine, TOOLS, ALL_TOOLS, BASE_TOOLS, buildPolicy } from '../src/engine.mjs';
 import { resolveShell } from '../src/shell-tool.mjs';
 import { POLICY } from '../src/policy.mjs';
 import { snapshotConfig } from '../src/native-config.mjs';
@@ -313,4 +313,38 @@ test('invalid native configuration fails before contributing prompts or tools', 
     assert.equal(sections.length, 0);
     assert.equal(registrations.size, 0);
   }
+});
+
+test('screenshot attachment stays pure JSON while rendering an image block', async t => {
+  const root = await temporaryWorkspace(t, 'screenshot');
+  const png = path.join(root, 'shot.png');
+  await fs.writeFile(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  const original = StrongEngine.prototype.call;
+  StrongEngine.prototype.call = async () => ({
+    action: 'screenshot', url: 'https://example.com/', title: 'Example',
+    screenshot: { path: png, mediaType: 'image/png', width: 1, height: 1, fullPage: false }, note: 'saved',
+  });
+  t.after(() => { StrongEngine.prototype.call = original; });
+  const { ctx, registrations } = host(undefined, root);
+  ctx.get = key => {
+    if (key === 'llm') return { resolveModelInfo: async () => ({ inputModalities: ['image'] }) };
+    if (key === 'attachments') return { saveImage: async () => ({ id: 'image-1' }) };
+    return undefined;
+  };
+  apply(ctx);
+  const execution = { signal: new AbortController().signal, modelSelection: { provider: 'test-vision', model: 'vision' } };
+  const tool = registrations.get('strong_browse');
+  const value = await tool.execute({ action: 'screenshot' }, execution);
+  assert.equal(value.image.attached, true);
+  assert.equal(Object.hasOwn(value, 'screenshot'), false);
+  assert.equal(Object.hasOwn(value, '_imageBlocks'), false);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    assert.equal(Object.getOwnPropertyDescriptor(value, key).enumerable, true, key);
+  }
+  assert.equal(JSON.stringify(value).includes('image-1'), false);
+  const rendered = tool.output.render({}, value);
+  assert.equal(rendered.length, 2);
+  assert.equal(rendered[0].type, 'text');
+  assert.deepEqual(JSON.parse(rendered[0].text), value);
+  assert.deepEqual(rendered[1], { type: 'image', attachment: { id: 'image-1' } });
 });

@@ -321,22 +321,31 @@ async function execute(shell, cwd, cwdLabel, command, timeoutMs, signal, root = 
     let timedOut = false;
     let abortReason;
     const started = Date.now();
+    let forceTimer;
+    const armForceFinish = () => {
+      if (settled || forceTimer) return;
+      forceTimer = setTimeout(() => { if (!settled) finish(null, child.exitCode, child.signalCode); }, 750);
+      forceTimer.unref?.();
+    };
     const timer = setTimeout(() => {
       if (settled) return;
       timedOut = true;
       killTree(child);
-      setTimeout(() => { if (!settled) { try { child.kill('SIGKILL'); } catch {} } }, 2000).unref?.();
+      setTimeout(() => { if (!settled) { try { child.kill('SIGKILL'); } catch {} } }, 500).unref?.();
+      armForceFinish();
     }, timeoutMs);
     const onAbort = () => {
       if (settled) return;
       abortReason = signal.reason instanceof Error ? signal.reason : new WorkspaceError('ABORTED', 'Operation cancelled.');
       killTree(child);
+      armForceFinish();
     };
     signal?.addEventListener('abort', onAbort, { once: true });
     const finish = (error, code, signalName) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (forceTimer) clearTimeout(forceTimer);
       signal?.removeEventListener('abort', onAbort);
       if (error) { reject(error); return; }
       const out = stdout.read();
@@ -350,10 +359,14 @@ async function execute(shell, cwd, cwdLabel, command, timeoutMs, signal, root = 
         stdoutTruncated: out.truncated, stderrTruncated: err.truncated,
         truncated: out.truncated || err.truncated, durationMs: Date.now() - started,
       });
+      if (timedOut || abortReason) {
+        try { child.stdout.destroy(); child.stderr.destroy(); child.unref(); } catch {}
+      }
     };
     child.stdout.on('data', chunk => stdout.push(chunk));
     child.stderr.on('data', chunk => stderr.push(chunk));
     child.once('error', error => finish(new WorkspaceError('SHELL_SPAWN_FAILED', '无法启动 ' + shell.label + ': ' + error.message)));
+    child.once('exit', (code, signalName) => { if (timedOut || abortReason) finish(null, code, signalName); });
     child.once('close', (code, signalName) => finish(null, code, signalName));
   });
 }

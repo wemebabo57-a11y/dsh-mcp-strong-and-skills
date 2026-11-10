@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WEB_TOOL, WEB_SEARCH_LIMIT, clearWebCache, decodeEntities, extractPage, parseBing, parseDuckDuckGo, runWebTool } from '../src/web-tools.mjs';
+import { WEB_TOOL, WEB_SEARCH_LIMIT, clearWebCache, decodeEntities, extractPage, parseBing, parseDuckDuckGo, runWebTool, unwrapBingUrl } from '../src/web-tools.mjs';
 
 function htmlResponse(html, { url = '', type = 'text/html; charset=utf-8' } = {}) {
   const response = new Response(html, { status: 200, headers: { 'content-type': type } });
@@ -181,4 +181,24 @@ test('search and page parsers handle fixture markup without leaking scripts', ()
   assert.equal(page.text.includes('secret'), false);
   assert.equal(page.text.includes('Hello & world'), true);
   assert.deepEqual(page.links, [{ text: 'Next', url: 'https://example.com/next' }]);
+});
+
+test('Bing ck/a redirects are unwrapped and deduped after canonicalization', async () => {
+  const target = 'https://example.com/story?utm_source=bing&id=7';
+  const encoded = 'a1' + Buffer.from(target).toString('base64url');
+  const make = p => '<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&&p=' + p + '&amp;u=' + encoded + '&amp;ntb=1">Bing</a></h2><p>s</p></li>';
+  assert.equal(unwrapBingUrl('https://www.bing.com/ck/a?u=' + encoded), target);
+  assert.equal(unwrapBingUrl('https://www.bing.com/ck/a?u=a1bad&ntb=1'), 'https://www.bing.com/ck/a?u=a1bad&ntb=1');
+  assert.equal(unwrapBingUrl('https://example.com/ck/a?u=' + encoded), 'https://example.com/ck/a?u=' + encoded);
+  assert.equal(unwrapBingUrl('not a url'), '');
+  await withFetch(async url => {
+    if (String(url).includes('duckduckgo')) return new Response('blocked', { status: 500 });
+    if (String(url).includes('bing.com/search')) return htmlResponse(make('p1') + make('p2'));
+    return htmlResponse('<html><body>unknown</body></html>');
+  }, async () => {
+    const searched = await runWebTool({ action: 'search', query: 'bing-unwrap' });
+    assert.equal(searched.results.length, 1);
+    assert.equal(searched.results[0].url, 'https://example.com/story?id=7');
+    assert.equal(searched.results[0].domain, 'example.com');
+  });
 });

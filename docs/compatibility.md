@@ -1,6 +1,18 @@
 # DeepSeek Harness compatibility
 
-Initial contract review on 2026-10-24; updated for v0.4.1 on 2026-11-10 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
+Initial contract review on 2026-10-24; updated for v0.4.2 on 2026-11-10 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
+
+## 0.4.2 correctness fixes — 2026-11-10
+
+Version 0.4.2 is a correctness maintenance release. The tool surface, default switches, configuration fields and token budgets are unchanged: six entries by default, seven with the optional shell, and the same four budget profiles as 0.4.1.
+
+`strong_web` now unwraps Bing `/ck/a` results before canonical deduplication. When the `u` parameter starts with `a1`, the remainder is decoded as base64url, HTML entities are decoded, and only http(s) targets are accepted; malformed or non-Bing redirects fall back to the original URL. This prevents `bing.com/ck/a` pages from being returned as results and makes duplicate targets collapse after `utm_*` removal.
+
+`strong_shell` now settles a timed-out or cancelled command even when a descendant keeps the stdio pipes open. The timeout path kills the process tree, arms a 750 ms forced finish, and schedules a SIGKILL retry after 500 ms; an `exit` listener provides a second completion path. When timeout or cancellation wins, the tool destroys `stdout`/`stderr` and unrefs the child. This addresses the prior behavior where `timeoutMs: 1000` could block for the full ten-second command window because the implementation waited only for `close`.
+
+`strong_browse` click predicates return `false` when no element matches, and the action layer raises `BROWSER_TARGET_MISSING` instead of returning a successful page state. Screenshot image blocks are stored in a module-private `WeakMap` keyed by the tool result; the result object itself remains plain enumerable JSON, while `render` appends the image block from the map. This removes the non-enumerable `_imageBlocks` property that caused PTC lossless-JSON rejection.
+
+Verification in this working copy: **168 automated tests**, including Bing redirect unwrapping/deduplication and malformed `u` fallback, a `sleep 10 & wait` timeout that returns in under three seconds, missing-click predicate behavior, and a native screenshot test asserting pure JSON plus an appended image block. `node scripts/check.mjs` and `node scripts/build-ui.mjs --check` pass. A live Bing search returned real domains rather than `bing.com/ck/a` and opened the first result text; a real Edge run returned `BROWSER_TARGET_MISSING` for a missing selector and produced a 1280×900 PNG. The installed plugin was still 0.4.1 during these checks, so the PTC path itself was not rerun after installation; the serialization boundary is covered by the native regression test. No model inference was sent.
 
 ## 0.4.1 security, lifecycle and budget hardening — 2026-11-10
 

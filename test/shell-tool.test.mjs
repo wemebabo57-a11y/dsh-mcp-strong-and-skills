@@ -111,3 +111,12 @@ test('shell resolution is cached by backend and executable settings', async () =
     clearShellCache();
   }
 });
+
+test('timeout settles even when a background child keeps stdout open', async t => {
+  const root = await workspace(t);
+  if (!(await bashShell(t))) return;
+  const started = Date.now();
+  const result = await runShellTool({ command: 'sleep 10 & wait', timeoutMs: 1000 }, { root });
+  assert.equal(result.timedOut, true);
+  assert.ok(Date.now() - started < 3000, 'elapsed ' + (Date.now() - started) + 'ms');
+});

@@ -258,13 +258,31 @@ export function parseDuckDuckGo(html) {
   return results;
 }
 
+export function unwrapBingUrl(value) {
+  let redirect;
+  try { redirect = new URL(value); } catch { return ''; }
+  if (!/(^|\.)bing\.com$/i.test(redirect.hostname) || !redirect.pathname.startsWith('/ck/a')) return redirect.toString();
+  const encoded = redirect.searchParams.get('u');
+  if (!encoded) return redirect.toString();
+  let target = encoded;
+  if (/^a1/i.test(encoded)) {
+    try { target = Buffer.from(encoded.slice(2).replace(/\+/g, '-').replace(/\//g, '_'), 'base64url').toString('utf8'); }
+    catch { return redirect.toString(); }
+  }
+  target = decodeEntities(target);
+  if (!/^https?:\/\//i.test(target)) return redirect.toString();
+  try { return new URL(target).toString(); } catch { return redirect.toString(); }
+}
+
 export function parseBing(html) {
   const results = [];
   const blocks = html.split(/<li class="b_algo"/).slice(1);
   for (const block of blocks) {
     const link = /<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(block);
     if (!link) continue;
-    const url = absolute(link[1], 'https://www.bing.com');
+    const raw = absolute(link[1], 'https://www.bing.com');
+    if (!raw) continue;
+    const url = unwrapBingUrl(raw);
     if (!url) continue;
     const snippet = /<p[^>]*>([\s\S]*?)<\/p>/.exec(block);
     results.push({ title: stripTags(link[2]), url, snippet: snippet ? stripTags(snippet[1]) : '' });
