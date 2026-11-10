@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runBuiltinShell } from '../src/builtin-shell.mjs';
@@ -75,5 +75,45 @@ test('builtin shell falls back to real executables on PATH', async () => {
     assert.match(missing.stderr, /command not found/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('builtin shell adds sort, uniq, tr and cut text helpers', async () => {
+  const root = await makeRoot();
+  try {
+    const run = (command, extra = {}) => runBuiltinShell({ command, cwd: root, root, env: { ...process.env }, ...extra });
+    await run('echo b > words.txt');
+    await run('echo a >> words.txt');
+    await run('echo a >> words.txt');
+    assert.equal((await run('sort -u words.txt')).stdout, 'a\nb\n');
+    assert.equal((await run('sort -r words.txt')).stdout, 'b\na\na\n');
+    assert.match((await run('uniq -c words.txt')).stdout, /1 b\n\s*2 a\n/);
+    assert.equal((await run('tr a-z A-Z < words.txt')).stdout, 'B\nA\nA\n');
+    await run('echo left,right > fields.csv');
+    assert.equal((await run('cut -d , -f 2 fields.csv')).stdout, 'right\n');
+    assert.equal((await run('cut --delimiter=, --fields=1 fields.csv')).stdout, 'left\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('builtin shell rejects reads and writes that escape through directory links', async () => {
+  const root = await makeRoot();
+  const outside = await makeRoot();
+  try {
+    await writeFile(path.join(outside, 'secret.txt'), 'OUTSIDE');
+    const link = path.join(root, 'linked');
+    await symlink(outside, link, 'junction');
+    const run = (command) => runBuiltinShell({ command, cwd: root, root, env: { ...process.env } });
+    const read = await run('cat linked/secret.txt');
+    assert.equal(read.exitCode, 1);
+    assert.match(read.stderr, /符号链接|路径/);
+    assert.equal(read.stdout.includes('OUTSIDE'), false);
+    const write = await run('echo changed > linked/new.txt');
+    assert.equal(write.exitCode, 1);
+    assert.match(write.stderr, /符号链接|路径/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });

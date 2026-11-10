@@ -1,5 +1,20 @@
 # 更新记录
 
+## 0.4.1 — 2026-11-10（维护版）
+
+包版本：`0.4.1`。本版不新增常驻工具，保持默认 6 个入口、开启附加 Shell 后 7 个入口；集中修复安全、并发、路径与预算问题，并进一步压低常驻提示词。
+
+- **`strong_web` 安全与缓存**：搜索缓存与 `r1…rN` 别名改为按项目根隔离，只解析该项目最近一次搜索，避免跨项目读取旧结果；增加根缓存 TTL/LRU 上限。默认拒绝 localhost、回环、私有、链路本地与云元数据地址，手动跟随重定向时逐跳复查，并提供 `webAllowPrivate` 显式开关。响应改为流式读取并在 2 MB 上限处中止，按响应头/meta 解码字符集；实体解码不再因非法码点抛错；搜索结果按规范化 URL 去重。
+- **非 ASCII diff 路径**：`strong_review` 与 `strong_context diff` 使用 `core.quotePath=false`，并兼容 Git 的 C 引号八进制文件名；中文、空格与特殊字符路径不再被遗漏或误判。
+- **`strong_browse` 生命周期**：并发打开同一项目复用同一个启动 Promise；启动超时/失败会杀掉子进程并清理临时 profile；关闭动作排入会话队列，避免与截图/点击并发；截图改为会话内的独立目录与递增文件名，关闭时随 profile 清理；`fullPage` 可按整页截图，`type` 改用 CDP `Input.insertText`，补充 PageUp/PageDown/Home/End/Delete，修正 `scroll y=0` 与 `wait` 实际等待时间。
+- **工作区与代码工具**：新增无内容的 `list`/采样清单，`map`、代码 inventory 与 `strong_review` 不再为每个文件读取完整正文；统一 `fitResult` 输出预算，避免多次 JSON 序列化；`diff` 支持 `unstaged|staged|all`，`search` 支持 `literal|terms` 与 `caseSensitive`；符号扫描补充类/对象方法，截断提示改为按实际资源档位生成。
+- **Shell 与 MCP**：Shell 后端探测按平台/后端/路径/WSL 发行版/PATH 缓存，减少每次命令重复探测；内置 Shell 的路径检查加入真实路径（realpath）校验，阻止目录链接逃逸，并新增 `sort`、`uniq`、`tr`、`cut`；MCP 输入改为分块收集后一次拼接，消除大帧的二次复杂度。
+- **校验、策略与知识库**：引擎、代码工具与 Shell 共用同一套参数校验，覆盖 number/boolean/minLength 等类型与范围；浏览提示只在工具实际注册时出现，视觉能力缓存增加 TTL 与有界淘汰；知识库本地检索与 GitHub 一样按全部词匹配，本地扫描上限继承配置，项目设定解析增加记忆化；技能加载返回 `appliedLimit` 与 `limitReason`，不再静默截断。
+- **CLI**：新增 `--version`/`-v`/`version`，参数解析支持 `--flag=value`，并新增 `--web-private on|off` 控制内网访问；同时保留重复参数与缺少值的报错。
+- **预算**：常驻提示词、工具描述与策略提示进一步压缩。默认扩展工具约 **1,473 tokens**（6 个入口），精简 + 关闭增强思考约 **562 tokens**（2 个入口），附加 Shell 约 **1,798 tokens**（7 个入口），精简 + Shell 约 **886 tokens**（3 个入口）；静态门禁仍为默认 ≤1,600、精简 ≤650、Shell ≤1,900。
+- **验证**：164 项自动化测试、`node --test` 全部通过；`node scripts/check.mjs` 通过。新增覆盖包括跨项目缓存、SSRF/实体解码、非 ASCII diff、diff scope、terms 搜索、代码方法、内置 Shell 文本命令与链接逃逸、Shell 缓存、CLI 版本/等号参数等。
+
+
 ## 0.4.0 — 2026-11-08（正式版）
 
 包版本：`0.4.0`。

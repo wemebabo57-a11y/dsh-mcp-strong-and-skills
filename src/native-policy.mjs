@@ -20,9 +20,17 @@ function ptcAvailable(ctx) {
 }
 
 /** Rebuild only our section after the host has resolved the current step's route. */
-export function installNativePolicy(ctx, currentConfig) {
+export function installNativePolicy(ctx, currentConfig, options = {}) {
+  const browseState = selection => typeof options.browseAvailable === 'function' ? options.browseAvailable(selection) : undefined;
   ctx.systemPrompt.section({ name: POLICY_SECTION, order: 650,
-    text: (context = {}) => buildPolicy(currentConfig(), { selection: context.modelSelection, ptcAvailable: ptcAvailable(ctx) }), interpolate: false });
+    text: (context = {}) => {
+      const selection = context.modelSelection;
+      return buildPolicy(currentConfig(), {
+        selection,
+        ptcAvailable: ptcAvailable(ctx),
+        browseAvailable: selection ? browseState(selection) : undefined,
+      });
+    }, interpolate: false });
   if (typeof ctx.on !== 'function') return;
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const assembly = await next();
@@ -34,7 +42,8 @@ export function installNativePolicy(ctx, currentConfig) {
         ? await ctx.workingDirectory.ensure(context.agent, context.signal)
         : ctx.workingDirectory.defaultDirectory;
     }
-    const text = buildPolicy(config, { selection: selectionForAssembly(assembly, context), root, ptcAvailable: ptcAvailable(ctx) });
+    const selection = selectionForAssembly(assembly, context);
+    const text = buildPolicy(config, { selection, root, ptcAvailable: ptcAvailable(ctx), browseAvailable: selection ? browseState(selection) : undefined });
     return { ...assembly, sections: assembly.sections.map(section => section.name === POLICY_SECTION ? { ...section, text } : section) };
   }, { prepend: true });
 }

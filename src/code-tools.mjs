@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { WorkspaceError } from './workspace.mjs';
+import { validateArguments as validateSchema } from './validation.mjs';
+import { fitResult } from './budget.mjs';
 
 export const EXTRA_TOOLS = Object.freeze([
   { name: 'strong_code', description: '只读代码定位：symbols 声明；imports 静态 JS/TS 导入图；diagnostics 解析 text 中的报错并安全补充源码。启发式，有扫描上限。', inputSchema: { type: 'object', properties: {
@@ -7,6 +9,7 @@ export const EXTRA_TOOLS = Object.freeze([
   }, required: ['action'], additionalProperties: false } },
   { name: 'strong_review', description: '只读审查实际 diff：变更文件、风险位置、相关测试及已有验证脚本。仅建议，不运行命令。', inputSchema: { type: 'object', properties: {
     path: { type: 'string', maxLength: 1000 }, limit: { type: 'integer', minimum: 1, maximum: 500, description: '普通模式最多 80；无限 token 模式最多 500' },
+    scope: { type: 'string', enum: ['unstaged', 'staged', 'all'] },
   }, additionalProperties: false } },
 ]);
 
@@ -30,16 +33,8 @@ function cancelled(signal) {
 function validate(name, args) {
   const tool = EXTRA_TOOLS.find((item) => item.name === name);
   if (!tool) throw new WorkspaceError('INVALID_TOOL', 'Unknown code tool.');
-  if (!args || typeof args !== 'object' || Array.isArray(args) || ![null, Object.prototype].includes(Object.getPrototypeOf(args))) throw new WorkspaceError('INVALID_ARGUMENTS', 'Arguments must be a plain object.');
-  const schema = tool.inputSchema;
-  for (const key of schema.required ?? []) if (!Object.hasOwn(args, key)) throw new WorkspaceError('INVALID_ARGUMENTS', `Missing argument: ${key}`);
-  for (const [key, value] of Object.entries(args)) {
-    if (!Object.hasOwn(schema.properties, key)) throw new WorkspaceError('INVALID_ARGUMENTS', `Unknown argument: ${key}`);
-    const rule = schema.properties[key];
-    if ((rule.type === 'string' && (typeof value !== 'string' || value.length > rule.maxLength)) ||
-        (rule.type === 'integer' && (!Number.isInteger(value) || value < rule.minimum || value > rule.maximum)) ||
-        (rule.enum && !rule.enum.includes(value))) throw new WorkspaceError('INVALID_ARGUMENTS', `Invalid argument: ${key}`);
-  }
+  try { validateSchema(tool.inputSchema, args); }
+  catch (error) { throw new WorkspaceError('INVALID_ARGUMENTS', error.message); }
   if (name === 'strong_code' && args.action === 'diagnostics' && (typeof args.text !== 'string' || !args.text.trim())) throw new WorkspaceError('INVALID_ARGUMENTS', 'diagnostics requires nonempty text.');
 }
 
@@ -47,31 +42,7 @@ function validate(name, args) {
 function fit(result, maxChars) {
   if (maxChars === Number.POSITIVE_INFINITY) { result.truncated = Boolean(result.truncated); return result; }
   const budget = Number.isInteger(maxChars) ? Math.max(1000, Math.min(20000, maxChars)) : 6000;
-  result.truncated = Boolean(result.truncated);
-  while (JSON.stringify(result).length > budget) {
-    let candidate;
-    let fallback;
-    const visit = (object) => {
-      for (const [key, value] of Object.entries(object)) {
-        if (Array.isArray(value) && value.length) {
-          const size = JSON.stringify(value).length;
-          const option = { parent: object, key, size, array: true };
-          if (value.length > 1 && (!candidate || size > candidate.size)) candidate = option;
-          if (!fallback || size > fallback.size) fallback = option;
-          for (const entry of value) if (entry && typeof entry === 'object') visit(entry);
-        } else if (typeof value === 'string' && value.length > 160) {
-          if (!candidate || value.length > candidate.size) candidate = { parent: object, key, size: value.length };
-        } else if (value && typeof value === 'object') visit(value);
-      }
-    };
-    visit(result);
-    candidate ??= fallback;
-    if (!candidate) return { action: result.action, truncated: true, note: 'Output budget reached; narrow the path.' };
-    if (candidate.array) { candidate.parent[candidate.key].pop(); result.omittedItems = (result.omittedItems ?? 0) + 1; }
-    else candidate.parent[candidate.key] = clipped(candidate.parent[candidate.key], Math.max(120, Math.floor(candidate.size / 2)));
-    result.truncated = true;
-  }
-  return result;
+  return fitResult(result, budget, { hint: 'Output capped; narrow the path or request fewer items.' });
 }
 
 // Preserve offsets/newlines while excluding comments and optionally literals.
@@ -118,6 +89,10 @@ function mask(source, { strings = true, hash = false } = {}) {
 }
 
 async function inventory(workspace, selected, signal) {
+  if (typeof workspace.list === 'function') {
+    const listed = await workspace.list(selected, { signal });
+    return { action: 'map', files: listed.files, ...listed.stats, truncated: Boolean(listed.truncated ?? listed.stats?.scanLimitReached) };
+  }
   return workspace.run({ action: 'map', path: selected, limit: 200 }, { signal });
 }
 
@@ -163,7 +138,7 @@ async function sourceFiles(workspace, selected, signal, includeRootInventory = f
     if (charLimitReached || reads >= MAX_READS || lineCount >= MAX_LINES || charCount >= MAX_CHARS) break;
   }
   truncated ||= sources.length < names.length;
-  return { sources, inventory: roots.files ?? [], truncated: Boolean(truncated), scannedFiles: sources.length, scannedLines: lineCount, skipped: map.skipped ?? {} };
+  return { sources, inventory: roots.files ?? [], truncated: Boolean(truncated), scannedFiles: sources.length, scannedLines: lineCount, skipped: map.skipped ?? {}, limits };
 }
 
 function symbols(scan, limit, signal) {
@@ -181,6 +156,7 @@ function symbols(scan, limit, signal) {
         ['type', /\b(?:type|enum|struct|trait)\s+([A-Za-z_$][\w$]*)/g],
         ['function', /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^;]*\)|[A-Za-z_$][\w$]*)\s*=>/g],
         ['export', /\bexport\s+(?:default\s+)?(?:async\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g],
+        ['method', /^\s*(?!(?:if|for|while|switch|catch|with|return|function|class)\b)(?:(?:async|static|get|set)\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g],
       ];
       const seen = new Set();
       for (const [kind, regex] of declarations) for (const match of line.matchAll(regex)) {
@@ -200,7 +176,7 @@ function symbols(scan, limit, signal) {
     }
   }
   return { action: 'symbols', items, scannedFiles: scan.scannedFiles, scannedLines: scan.scannedLines, skipped: scan.skipped, truncated: scan.truncated || more,
-    note: 'Heuristic declarations, not an AST or reference index; JS/TS plus basic Python/Go/Rust declarations. Comments/literals excluded; multiline, Unicode names and template interpolations may be missed. At most 32 files, 800 lines/file, 2400 lines and 40 reads.' };
+    note: 'Heuristic declarations, not an AST or reference index; JS/TS plus basic Python/Go/Rust declarations. Comments/literals excluded; multiline, Unicode names and template interpolations may be missed. At most ' + scan.limits.files + ' files, ' + scan.limits.lines + ' lines and ' + scan.limits.reads + ' reads.' };
 }
 
 function resolveImport(from, specifier, inventorySet) {
@@ -315,10 +291,29 @@ const RISKS = [
   ['input-parsing', /\b(?:JSON\.parse|parseInt|parseFloat|Number)\s*\(/, 'Check malformed input, boundary values and failure handling.'],
 ];
 
+export function gitQuoted(value) {
+  const bytes = [];
+  for (let index = 1; index < value.length - 1; index++) {
+    const char = value[index];
+    if (char !== '\\') { bytes.push(...Buffer.from(char, 'utf8')); continue; }
+    const next = value[++index];
+    if (/[0-7]/.test(next)) {
+      let octal = next;
+      while (octal.length < 3 && /[0-7]/.test(value[index + 1])) octal += value[++index];
+      bytes.push(parseInt(octal, 8) & 0xff);
+    } else if (next === 'n') bytes.push(10);
+    else if (next === 't') bytes.push(9);
+    else if (next === 'r') bytes.push(13);
+    else if (next === 'b') bytes.push(8);
+    else if (next !== undefined) bytes.push(...Buffer.from(next, 'utf8'));
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
 function diffPath(value) {
   if (value === '/dev/null') return null;
   if (value.startsWith('"')) {
-    try { value = JSON.parse(value); } catch { return null; }
+    try { value = JSON.parse(value); } catch { value = gitQuoted(value); }
   }
   return /^[ab]\//.test(value) ? value.slice(2) : null;
 }
@@ -390,7 +385,7 @@ function relatedTests(changed, inventoryFiles, limit) {
 async function review(workspace, args, signal) {
   const selected = own(args, 'path', '.');
   const limit = own(args, 'limit', 40);
-  const diff = await workspace.run({ action: 'diff', path: selected }, { signal });
+  const diff = await workspace.run({ action: 'diff', path: selected, scope: own(args, 'scope', 'unstaged') }, { signal });
   const parsed = reviewDiff(diff.diff ?? '', limit, signal);
   if (!diff.available) return { action: 'review', available: false, executed: false, reason: diff.reason, scope: diff.scope, files: [], findings: [] };
   // Discover existing scripts/tests once. Their text is data, never executed.

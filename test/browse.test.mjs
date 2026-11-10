@@ -8,6 +8,7 @@ test('strong_browse schema stays compact and action-oriented', () => {
   assert.deepEqual(BROWSE_TOOL.inputSchema.properties.action.enum, ['open', 'snapshot', 'screenshot', 'click', 'type', 'press', 'scroll', 'wait', 'close']);
   assert.equal(BROWSE_TOOL.inputSchema.properties.url.maxLength, 2000);
   assert.equal(BROWSE_TOOL.inputSchema.properties.ms.maximum, 30000);
+  assert.equal(BROWSE_TOOL.inputSchema.properties.fullPage.type, 'boolean');
   assert.equal(BROWSE_TOOL.inputSchema.additionalProperties, false);
   for (const key of Object.values(BROWSE_TOOL.inputSchema.properties)) assert.equal(key.description, undefined);
   assert.equal(typeof findBrowser(), 'string');

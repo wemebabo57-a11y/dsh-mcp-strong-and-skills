@@ -84,7 +84,7 @@ const SETTINGS_ENTRY = 'strong-skills';
 const SETTINGS_PACKAGE = 'dsh-strong-skills';
 const SETTINGS_FIELDS = Object.freeze([
   'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet',
-  'webTool', 'browseTool', 'ptcMode', 'browserPath',
+  'webTool', 'webAllowPrivate', 'browseTool', 'ptcMode', 'browserPath',
   'claudeMode', 'weNeedToThinking', 'unlimitedTokens',
   'shellTool', 'shellBackend', 'shellPath', 'wslDistro',
   'profile', 'allowBrandColors', 'brandIntent', 'maxOutputChars', 'maxFiles',
@@ -117,7 +117,7 @@ const PROFILE_LIMITS = Object.freeze({
 /** Config's optional limit overrides inherit their runtime defaults from the selected profile. */
 function displaySettings(value) {
   if (value === undefined) return undefined;
-  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '', webTool: true, browseTool: 'auto', ptcMode: 'auto', browserPath: '' };
+  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '', webTool: true, webAllowPrivate: false, browseTool: 'auto', ptcMode: 'auto', browserPath: '' };
   if (value.shellTool === undefined && value.bashTool === true) defaults.shellTool = true;
   const resolved = { ...value };
   for (const [field, fallback] of Object.entries(defaults)) {
@@ -128,7 +128,7 @@ function displaySettings(value) {
 
 function validateSetting(field, value) {
   if (!SETTINGS_FIELDS.includes(field)) throw new TypeError(`Unknown setting: ${field}`);
-  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool', 'webTool'].includes(field)) {
+  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool', 'webTool', 'webAllowPrivate'].includes(field)) {
     if (typeof value !== 'boolean') throw new TypeError(`${field} must be boolean`);
   } else if (field === 'knowledgeConfig') {
     parseKnowledgeConfig(value);
@@ -352,6 +352,7 @@ const EN = Object.freeze({
   tools: 'Tool set', toolsHint: 'Expanded adds navigation and inspection tools; compact keeps the core tools.', compact: 'Compact', expanded: 'Expanded',
   network: 'Web and browser tools', networkHint: 'Compact mode omits both; expanded mode adds them. Browser screenshots are only shown to vision models.',
   webTool: 'Web search tool', webToolHint: 'Adds strong_web: search returns a short JSON list of ids, titles, links, and snippets; open reads a page by id or URL without launching a browser.',
+  webAllowPrivate: 'Allow private network access', webAllowPrivateHint: 'Off by default to block SSRF: strong_web rejects localhost, private, link-local, and cloud metadata addresses. Enable only when you intentionally need to read a local or intranet page.',
   browseTool: 'Browser tool', browseToolHint: 'Adds strong_browse: a real headless Chrome/Edge with no visible window. Vision models can see screenshots; text models should use strong_web.',
   browseAuto: 'Automatic (vision models only)', browseOn: 'Always on', browseOff: 'Off',
   ptcMode: 'PTC guidance', ptcModeHint: 'Adds short guidance for calling tools inside run_code: parallel reads, selected fields only, close the browser when done. Automatic detects run_code.',
@@ -397,6 +398,7 @@ const ZH = Object.freeze({
   tools: '工具集', toolsHint: '扩展模式增加导航与检查工具；精简模式保留核心工具。', compact: '精简', expanded: '扩展',
   network: '联网与浏览器', networkHint: '精简模式不加载这两个工具，扩展模式才加入；截图只给视觉模型看。',
   webTool: '联网检索工具', webToolHint: '增加 strong_web：search 返回带 id、标题、网址和摘要的短 JSON；open 用 id 或网址读正文，不启动浏览器。',
+  webAllowPrivate: '允许访问内网', webAllowPrivateHint: '默认关闭以防 SSRF：strong_web 会拒绝 localhost、内网、链路本地和云元数据地址。仅在确需读取本地或内网页面时开启。',
   browseTool: '浏览器工具', browseToolHint: '增加 strong_browse：真实的无头 Chrome/Edge，不显示窗口。视觉模型能直接看截图；文本模型请用 strong_web。',
   browseAuto: '自动（仅视觉模型）', browseOn: '始终开启', browseOff: '关闭',
   ptcMode: 'PTC 引导', ptcModeHint: '宿主在 run_code 里调用工具时附加简短指导：并行读取、只取需要的字段、用完关闭浏览器。「自动」会检测 run_code。',
@@ -511,6 +513,7 @@ function createSettingsSection(h) {
         h('h3', null, t('network')),
         h('p', { className: 'strong-settings__hint' }, t('networkHint')),
         toggle('webTool', 'webTool', 'webToolHint'),
+        toggle('webAllowPrivate', 'webAllowPrivate', 'webAllowPrivateHint'),
         select('browseTool', 'browseTool', 'browseToolHint', [['auto', 'browseAuto'], ['on', 'browseOn'], ['off', 'browseOff']]),
         select('ptcMode', 'ptcMode', 'ptcModeHint', [['auto', 'auto'], ['on', 'ptcOn'], ['off', 'ptcOff']]),
         text('browserPath', 'browserPath', 'browserPathHint', 1000, 'C:/Program Files/Google/Chrome/Application/chrome.exe')),

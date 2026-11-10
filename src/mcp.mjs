@@ -2,6 +2,7 @@ import { StrongEngine, toolsForConfig, buildPolicy, boundResult } from './engine
 import { SKILL_CATALOG, loadSkill } from './skills.mjs';
 import packageInfo from '../package.json' with { type: 'json' };
 import { parseKnowledgeConfig, librariesForRoot } from './knowledge-config.mjs';
+import { StringDecoder } from 'node:string_decoder';
 
 // A small, dependency-free stdio implementation of the negotiated MCP subset.
 // No HTTP listener, sampling, prompts, or subscriptions. The optional strong_shell
@@ -17,8 +18,9 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
   const remoteKnowledge = librariesForRoot(parseKnowledgeConfig(engine.config.knowledgeConfig), engine.workspace.root).some(library => library.kind === 'github');
   const active = new Map();
   let state = 'new';
-  let buffer = Buffer.alloc(0);
+  let buffer = '';
   let dropping = false;
+  const decoder = new StringDecoder('utf8');
   let closed = false;
 
   const send = message => { if (!closed) output.write(JSON.stringify(message) + '\n'); };
@@ -101,17 +103,18 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
   }
 
   function onData(chunk) {
-    let bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    while (bytes.length) {
-      const newline = bytes.indexOf(10);
-      const fragment = newline < 0 ? bytes : bytes.subarray(0, newline);
-      if (!dropping && buffer.length + fragment.length > MAX_FRAME_BYTES) {
-        error(null, -32600, 'Message exceeds 1 MiB'); buffer = Buffer.alloc(0); dropping = true;
+    const text = Buffer.isBuffer(chunk) ? decoder.write(chunk) : String(chunk);
+    let offset = 0;
+    while (offset < text.length) {
+      const newline = text.indexOf('\n', offset);
+      const fragment = newline < 0 ? text.slice(offset) : text.slice(offset, newline);
+      if (!dropping && Buffer.byteLength(buffer, 'utf8') + Buffer.byteLength(fragment, 'utf8') > MAX_FRAME_BYTES) {
+        error(null, -32600, 'Message exceeds 1 MiB'); buffer = ''; dropping = true;
       }
-      if (!dropping) buffer = Buffer.concat([buffer, fragment]);
+      if (!dropping) buffer += fragment;
       if (newline < 0) break;
-      if (!dropping) accept(buffer);
-      buffer = Buffer.alloc(0); dropping = false; bytes = bytes.subarray(newline + 1);
+      if (!dropping) accept(Buffer.from(buffer, 'utf8'));
+      buffer = ''; dropping = false; offset = newline + 1;
     }
   }
   function close() {

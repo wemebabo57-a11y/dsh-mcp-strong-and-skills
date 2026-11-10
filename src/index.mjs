@@ -9,6 +9,7 @@ export const name = 'strong-skills';
 export const inject = ['tools', 'systemPrompt', 'workingDirectory'];
 export const Config = await loadNativeConfigSchema();
 
+const VISION_TTL = 5 * 60 * 1000;
 const visionRoutes = new Map();
 
 /** Accepts either a tool-activation context or a tool execution handle. */
@@ -19,18 +20,33 @@ function routeOf(context) {
   return { provider: header?.provider ?? options.provider, model: header?.model ?? options.model };
 }
 
-/** Cache per route: activation runs on every step and must stay cheap. */
+/** Cached route capability; undefined means not resolved yet, not false. */
+function visionState(selection) {
+  const provider = selection?.provider;
+  const model = selection?.model;
+  if (!provider || !model) return undefined;
+  const entry = visionRoutes.get(provider + '\u0000' + model);
+  if (!entry || entry.expires <= Date.now()) return undefined;
+  return Boolean(entry.value);
+}
+
+/** Cache per route with TTL: activation runs on every step and must stay cheap. */
 async function visionCapable(ctx, context) {
   const { provider, model } = routeOf(context);
   if (!provider || !model) return false;
-  const key = `${provider}\u0000${model}`;
-  if (visionRoutes.has(key)) return visionRoutes.get(key);
+  const key = provider + '\u0000' + model;
+  const cached = visionRoutes.get(key);
+  if (cached && cached.expires > Date.now()) return cached.value;
+  if (cached) visionRoutes.delete(key);
   try {
     const llm = ctx.get('llm');
     const info = await llm.resolveModelInfo(provider, model, context?.signal);
     const vision = Array.isArray(info?.inputModalities) && info.inputModalities.includes('image');
-    if (visionRoutes.size > 32) visionRoutes.clear();
-    visionRoutes.set(key, vision);
+    if (visionRoutes.size >= 64) {
+      const oldest = visionRoutes.keys().next().value;
+      if (oldest !== undefined) visionRoutes.delete(oldest);
+    }
+    visionRoutes.set(key, { value: vision, expires: Date.now() + VISION_TTL });
     return vision;
   } catch {
     return false;
@@ -83,7 +99,12 @@ export function apply(ctx, options = {}) {
   snapshotConfig(options); // Fail invalid composition before contributing anything.
   const currentConfig = () => snapshotConfig(options);
   registerSettingsHost(ctx);
-  installNativePolicy(ctx, currentConfig);
+  installNativePolicy(ctx, currentConfig, { browseAvailable: selection => {
+    const config = currentConfig();
+    if (config.browseTool === 'on') return true;
+    if (config.browseTool !== 'auto') return false;
+    return visionState(selection);
+  } });
   for (const tool of ALL_TOOLS) {
     ctx.tools.register({
       name: tool.name, description: tool.description, parameters: tool.inputSchema,

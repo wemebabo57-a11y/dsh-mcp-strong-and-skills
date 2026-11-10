@@ -30,14 +30,18 @@ export async function loadSkill(id, signal) {
 
 export async function selectSkills(args, config, signal) {
   signal?.throwIfAborted();
-  if (args.id) return { skills: [await loadSkill(args.id, signal)] };
+  if (args.id) return { skills: [await loadSkill(args.id, signal)], appliedLimit: 1 };
   if (!args.query?.trim()) return { skills: SKILL_CATALOG, hint: 'Supply id or a task query to load only relevant bodies.' };
   const query = args.query.toLowerCase();
   const ranked = ROUTES.map(([id, description, keywords], order) => ({ id, description, order,
     score: (query.includes(id) ? 5 : 0) + keywords.filter(word => keywordMatch(query, word)).length,
   })).filter(skill => skill.score > 0).sort((a, b) => b.score - a.score || a.order - b.order);
   if (!ranked.length) return { skills: SKILL_CATALOG, matched: false, hint: 'No confident keyword match; select an id from the catalog.' };
-  const selected = ranked.slice(0, Math.min(args.limit ?? 1, config.maxSkillLoads));
+  const requested = args.limit ?? 1;
+  const appliedLimit = Math.min(requested, config.maxSkillLoads);
+  const selected = ranked.slice(0, appliedLimit);
   const skills = await Promise.all(selected.map(skill => loadSkill(skill.id, signal)));
-  return { skills, alternatives: ranked.slice(selected.length, selected.length + 3).map(({ id, description }) => ({ id, description })) };
+  const result = { skills, appliedLimit, alternatives: ranked.slice(selected.length, selected.length + 3).map(({ id, description }) => ({ id, description })) };
+  if (requested > appliedLimit) result.limitReason = `Configured maxSkillLoads is ${config.maxSkillLoads}; requested ${requested}.`;
+  return result;
 }

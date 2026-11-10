@@ -14,7 +14,7 @@ export const UNLIMITED_LIMITS = Object.freeze({
 
 export function resolveConfig(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Config must be an object');
-  const allowed = new Set(['profile', 'maxOutputChars', 'maxFiles', 'maxFileBytes', 'maxSkillLoads', 'brandIntent', 'allowBrandColors', 'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'knowledgeConfig', 'shellTool', 'shellBackend', 'shellPath', 'wslDistro', 'bashTool', 'webTool', 'browseTool', 'ptcMode', 'browserPath']);
+  const allowed = new Set(['profile', 'maxOutputChars', 'maxFiles', 'maxFileBytes', 'maxSkillLoads', 'brandIntent', 'allowBrandColors', 'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'knowledgeConfig', 'shellTool', 'shellBackend', 'shellPath', 'wslDistro', 'bashTool', 'webTool', 'webAllowPrivate', 'browseTool', 'ptcMode', 'browserPath']);
   for (const key of Object.keys(input)) if (!allowed.has(key)) throw new Error(`Unknown config: ${key}`);
   const profile = input.profile === undefined ? 'balanced' : input.profile;
   if (typeof profile !== 'string' || !Object.hasOwn(PROFILES, profile)) throw new Error('profile must be lean, balanced, or thorough');
@@ -25,7 +25,7 @@ export function resolveConfig(input = {}) {
   for (const [key, max] of [['shellPath', 1000], ['wslDistro', 100]]) {
     if (input[key] !== undefined && (typeof input[key] !== 'string' || input[key].length > max || /[\0\r\n]/.test(input[key]))) throw new Error(key + ' must be a single-line string up to ' + max + ' characters');
   }
-  const config = { ...PROFILES[profile], maxFileBytes: 262144, enhancedThinking: true, thinkingLevel: 'balanced', clarification: 'more', modelPreset: 'auto', toolSet: 'expanded', claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '', webTool: true, browseTool: 'auto', ptcMode: 'auto', browserPath: '', ...input, profile };
+  const config = { ...PROFILES[profile], maxFileBytes: 262144, enhancedThinking: true, thinkingLevel: 'balanced', clarification: 'more', modelPreset: 'auto', toolSet: 'expanded', claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '', webTool: true, webAllowPrivate: false, browseTool: 'auto', ptcMode: 'auto', browserPath: '', ...input, profile };
   // 0.4.x/0.5.x migration: bashTool was an extra unsandboxed Bash switch. It now
   // means "enable the selectable shell tool"; an explicit shellTool wins.
   if (input.shellTool === undefined && input.bashTool !== undefined) config.shellTool = input.bashTool;
@@ -34,7 +34,7 @@ export function resolveConfig(input = {}) {
   for (const [key, values] of Object.entries({ thinkingLevel: ['balanced', 'deep'], clarification: ['auto', 'more', 'few'], modelPreset: ['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'], toolSet: ['compact', 'expanded'] })) {
     if (typeof config[key] !== 'string' || !values.includes(config[key])) throw new Error(`Invalid ${key}`);
   }
-  for (const key of ['enhancedThinking', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool', 'webTool']) {
+  for (const key of ['enhancedThinking', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool', 'webTool', 'webAllowPrivate']) {
     if (typeof config[key] !== 'boolean') throw new Error(`${key} must be boolean`);
   }
   if (typeof config.shellBackend !== 'string' || !SHELL_BACKENDS.includes(config.shellBackend)) throw new Error('Invalid shellBackend');

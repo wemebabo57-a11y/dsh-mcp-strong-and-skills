@@ -22,10 +22,24 @@ function contained(root, target) {
   return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
-function resolvePath(state, value) {
+async function resolvePath(state, value) {
   const target = path.resolve(state.cwd, value);
   if (!contained(state.root, target)) throw fail('路径超出项目目录：' + value, 'OUTSIDE_WORKSPACE');
-  return target;
+  const realRoot = state.realRoot || await fs.realpath(state.root);
+  state.realRoot = realRoot;
+  let probe = target;
+  for (;;) {
+    try {
+      const real = await fs.realpath(probe);
+      if (!contained(realRoot, real)) throw fail('路径经符号链接超出项目目录：' + value, 'OUTSIDE_WORKSPACE');
+      return target;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      const parent = path.dirname(probe);
+      if (parent === probe) throw fail('路径超出项目目录：' + value, 'OUTSIDE_WORKSPACE');
+      probe = parent;
+    }
+  }
 }
 
 function maxCollector(limit) {
@@ -63,6 +77,7 @@ function createState(spec) {
     signal: spec.signal,
     depth: 0,
     steps: 0,
+    realRoot: '',
     timedOut: false,
   };
 }
@@ -374,7 +389,7 @@ async function runCommand(state, command, stdin) {
   for (const redirect of command.redirs) {
     if (redirect.dup === 1) { stderrMerge = true; continue; }
     if (redirect.dup === 2) { stdoutToStderr = true; continue; }
-    const target = resolvePath(state, await wordValue(redirect.target, state));
+    const target = await resolvePath(state, await wordValue(redirect.target, state));
     if (redirect.fd === 'both') { writes.push({ file: target, append: redirect.mode === 'append', both: true }); continue; }
     if (redirect.fd === 0) { fileIn = target; continue; }
     if (redirect.fd === 2) { stderrToFile = { file: target, append: redirect.mode === 'append' }; continue; }
@@ -430,7 +445,7 @@ async function writeOutput(target, text) {
 async function findExecutable(state, name) {
   const hasSeparator = name.includes('/') || name.includes('\\');
   if (hasSeparator) {
-    const file = resolvePath(state, name);
+    const file = await resolvePath(state, name);
     return existsSync(file) ? file : null;
   }
   const extensions = process.platform === 'win32'
@@ -505,7 +520,7 @@ async function readInputs(state, files, input, toolName) {
   if (!files.length) return { text: input, label: '', exitCode: 0 };
   let text = '';
   for (const file of files) {
-    const target = resolvePath(state, file);
+    const target = await resolvePath(state, file);
     try { text += await fs.readFile(target, 'utf8'); }
     catch { return { text: '', label: file, exitCode: 1, error: toolName + ': ' + file + ': No such file or directory\n' }; }
   }
@@ -522,7 +537,7 @@ BUILTINS.pwd = async state => ({ stdout: state.cwd + '\n', stderr: '', exitCode:
 
 BUILTINS.cd = async (state, args) => {
   const target = args[0] === undefined || args[0] === '-' ? state.root : args[0].replace(/^~($|\/)/, (state.env.HOME || state.root) + '$1');
-  const resolved = resolvePath(state, target);
+  const resolved = await resolvePath(state, target);
   const stat = await fs.stat(resolved).catch(() => null);
   if (!stat || !stat.isDirectory()) return { stdout: '', stderr: 'cd: ' + target + ': Not a directory\n', exitCode: 1 };
   state.cwd = resolved;
@@ -553,7 +568,7 @@ BUILTINS.ls = async (state, args) => {
   const list = targets.length ? targets : ['.'];
   let stdout = '';
   for (const target of list) {
-    const resolved = resolvePath(state, target);
+    const resolved = await resolvePath(state, target);
     const stat = await fs.stat(resolved).catch(() => null);
     if (!stat) return { stdout: '', stderr: 'ls: ' + target + ': No such file or directory\n', exitCode: 2 };
     if (!stat.isDirectory()) { stdout += await formatEntry(resolved, target, flags); continue; }
@@ -583,7 +598,7 @@ BUILTINS.cat = async (state, args, input) => {
   let stdout = '';
   let stderr = '';
   for (const file of args) {
-    const target = resolvePath(state, file);
+    const target = await resolvePath(state, file);
     try { stdout += await fs.readFile(target, 'utf8'); }
     catch { stderr += 'cat: ' + file + ': No such file or directory\n'; }
   }
@@ -629,7 +644,7 @@ BUILTINS.grep = async (state, args, input) => {
   if (files.length) {
     source = '';
     for (const file of files) {
-      const target = resolvePath(state, file);
+      const target = await resolvePath(state, file);
       try { source += await fs.readFile(target, 'utf8'); }
       catch { return { stdout: '', stderr: 'grep: ' + file + ': No such file or directory\n', exitCode: 2 }; }
     }
@@ -666,12 +681,149 @@ BUILTINS.wc = async (state, args, input) => {
   return { stdout: parts.join('') + (files[0] ? ' ' + files[0] : '') + '\n', stderr: '', exitCode: 0 };
 };
 
+function expandSet(value) {
+  const chars = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === '\\' && index + 1 < value.length) {
+      const next = value[index + 1];
+      chars.push(next === 'n' ? '\n' : next === 't' ? '\t' : next === 'r' ? '\r' : next);
+      index += 1;
+      continue;
+    }
+    if (value[index + 1] === '-' && index + 2 < value.length) {
+      const start = char.codePointAt(0);
+      const end = value.codePointAt(index + 2);
+      if (start <= end) {
+        for (let code = start; code <= end; code += 1) chars.push(String.fromCodePoint(code));
+        index += 2;
+        continue;
+      }
+    }
+    chars.push(char);
+  }
+  return chars;
+}
+
+BUILTINS.sort = async (state, args, input) => {
+  const flags = new Set();
+  const files = [];
+  for (const arg of args) {
+    if (/^-[rnu]+$/.test(arg)) for (const flag of arg.slice(1)) flags.add(flag);
+    else files.push(arg);
+  }
+  const source = await readInputs(state, files, input, 'sort');
+  if (source.error) return { stdout: '', stderr: source.error, exitCode: 1 };
+  let lines = splitLines(source.text).map((value, index) => ({ value, index }));
+  const numeric = flags.has('n');
+  lines.sort((left, right) => {
+    let order;
+    if (numeric) {
+      const a = Number.parseFloat(left.value);
+      const b = Number.parseFloat(right.value);
+      order = (Number.isNaN(a) ? 0 : a) - (Number.isNaN(b) ? 0 : b);
+    } else order = left.value.localeCompare(right.value);
+    return order || left.index - right.index;
+  });
+  if (flags.has('r')) lines.reverse();
+  if (flags.has('u')) {
+    const seen = new Set();
+    lines = lines.filter(item => {
+      const key = numeric ? String(Number.parseFloat(item.value) || 0) : item.value;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+  const values = lines.map(item => item.value);
+  return { stdout: values.join('\n') + (values.length ? '\n' : ''), stderr: '', exitCode: 0 };
+};
+
+BUILTINS.uniq = async (state, args, input) => {
+  const flags = new Set();
+  const files = [];
+  for (const arg of args) {
+    if (/^-[cdui]+$/.test(arg)) for (const flag of arg.slice(1)) flags.add(flag);
+    else files.push(arg);
+  }
+  const source = await readInputs(state, files, input, 'uniq');
+  if (source.error) return { stdout: '', stderr: source.error, exitCode: 1 };
+  const groups = [];
+  for (const line of splitLines(source.text)) {
+    const key = flags.has('i') ? line.toLowerCase() : line;
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.count += 1;
+    else groups.push({ key, line, count: 1 });
+  }
+  let stdout = '';
+  for (const group of groups) {
+    if (flags.has('d') && group.count < 2) continue;
+    if (flags.has('u') && group.count !== 1) continue;
+    stdout += (flags.has('c') ? String(group.count).padStart(7) + ' ' : '') + group.line + '\n';
+  }
+  return { stdout, stderr: '', exitCode: 0 };
+};
+
+BUILTINS.tr = async (state, args, input) => {
+  const deleteSet = args.includes('-d');
+  const squeeze = args.includes('-s');
+  const values = args.filter(arg => arg !== '-d' && arg !== '-s');
+  const set1 = expandSet(values[0] ?? '');
+  const set2 = expandSet(values[1] ?? '');
+  if (!set1.length) return { stdout: '', stderr: '用法: tr [-d] [-s] set1 [set2]\n', exitCode: 2 };
+  if (!deleteSet && !set2.length) return { stdout: '', stderr: 'tr: 缺少 set2\n', exitCode: 2 };
+  const map = new Map();
+  if (!deleteSet) set1.forEach((char, index) => map.set(char, set2[Math.min(index, set2.length - 1)]));
+  let stdout = '';
+  let previous = '';
+  for (const char of String(input)) {
+    if (deleteSet && set1.includes(char)) continue;
+    const value = deleteSet ? char : map.get(char) ?? char;
+    if (squeeze && value === previous && set2.includes(value)) continue;
+    stdout += value;
+    previous = value;
+  }
+  return { stdout, stderr: '', exitCode: 0 };
+};
+
+BUILTINS.cut = async (state, args, input) => {
+  let delimiter = '\t';
+  let fields = '';
+  const files = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '-d' || arg === '--delimiter') { delimiter = args[index + 1] ?? delimiter; index += 1; }
+    else if (arg.startsWith('--delimiter=')) delimiter = arg.slice('--delimiter='.length);
+    else if (arg.startsWith('-d') && arg.length > 2) delimiter = arg.slice(2);
+    else if (arg === '-f' || arg === '--fields') { fields = args[index + 1] ?? ''; index += 1; }
+    else if (arg.startsWith('--fields=')) fields = arg.slice('--fields='.length);
+    else if (arg.startsWith('-f') && arg.length > 2) fields = arg.slice(2);
+    else files.push(arg);
+  }
+  if (!fields) return { stdout: '', stderr: '用法: cut -d 分隔符 -f 1,2-3 [file...]\n', exitCode: 2 };
+  const ranges = fields.split(',').flatMap(part => {
+    const match = /^(\d+)(?:-(\d*))?$/.exec(part.trim());
+    if (!match) return [];
+    const start = Number(match[1]);
+    const end = match[2] === undefined ? start : match[2] === '' ? Number.MAX_SAFE_INTEGER : Number(match[2]);
+    return [[start, end]];
+  });
+  const source = await readInputs(state, files, input, 'cut');
+  if (source.error) return { stdout: '', stderr: source.error, exitCode: 1 };
+  const lines = splitLines(source.text).map(line => {
+    if (!line.includes(delimiter)) return line;
+    const parts = line.split(delimiter);
+    return ranges.flatMap(([start, end]) => parts.slice(start - 1, end)).join(delimiter);
+  });
+  return { stdout: lines.join('\n') + (lines.length ? '\n' : ''), stderr: '', exitCode: 0 };
+};
+
 BUILTINS.mkdir = async (state, args) => {
   const parents = args.includes('-p');
   const targets = args.filter(arg => arg !== '-p');
   if (!targets.length) return { stdout: '', stderr: 'mkdir: 缺少目录名\n', exitCode: 1 };
   for (const target of targets) {
-    const resolved = resolvePath(state, target);
+    const resolved = await resolvePath(state, target);
     try { await fs.mkdir(resolved, { recursive: parents }); }
     catch (error) { return { stdout: '', stderr: 'mkdir: ' + target + ': ' + error.code + '\n', exitCode: 1 }; }
   }
@@ -680,7 +832,7 @@ BUILTINS.mkdir = async (state, args) => {
 
 BUILTINS.rmdir = async (state, args) => {
   for (const target of args) {
-    try { await fs.rmdir(resolvePath(state, target)); }
+    try { await fs.rmdir(await resolvePath(state, target)); }
     catch { return { stdout: '', stderr: 'rmdir: ' + target + ': Directory not empty or missing\n', exitCode: 1 }; }
   }
   return { stdout: '', stderr: '', exitCode: 0 };
@@ -688,7 +840,7 @@ BUILTINS.rmdir = async (state, args) => {
 
 BUILTINS.touch = async (state, args) => {
   for (const target of args) {
-    const resolved = resolvePath(state, target);
+    const resolved = await resolvePath(state, target);
     try { await fs.utimes(resolved, new Date(), new Date()); }
     catch { await fs.writeFile(resolved, ''); }
   }
@@ -702,7 +854,7 @@ BUILTINS.rm = async (state, args) => {
   const targets = args.filter(arg => !/^-[rf]+$/.test(arg));
   let stderr = '';
   for (const target of targets) {
-    const resolved = resolvePath(state, target);
+    const resolved = await resolvePath(state, target);
     try { await fs.rm(resolved, { recursive, force }); }
     catch (error) { if (!force) stderr += 'rm: ' + target + ': ' + (error.code || error.message) + '\n'; }
   }
@@ -714,8 +866,8 @@ BUILTINS.cp = async (state, args) => {
   const targets = args.filter(arg => !/^-[rR]+$/.test(arg));
   if (targets.length !== 2) return { stdout: '', stderr: '用法: cp [-r] source target\n', exitCode: 1 };
   try {
-    const source = resolvePath(state, targets[0]);
-    const destination = resolvePath(state, targets[1]);
+    const source = await resolvePath(state, targets[0]);
+    const destination = await resolvePath(state, targets[1]);
     const stat = await fs.stat(source);
     if (stat.isDirectory()) {
       if (!recursive) return { stdout: '', stderr: 'cp: ' + targets[0] + ' is a directory (use -r)\n', exitCode: 1 };
@@ -728,7 +880,7 @@ BUILTINS.cp = async (state, args) => {
 BUILTINS.mv = async (state, args) => {
   const targets = args.filter(arg => !arg.startsWith('-'));
   if (targets.length !== 2) return { stdout: '', stderr: '用法: mv source target\n', exitCode: 1 };
-  try { await fs.rename(resolvePath(state, targets[0]), resolvePath(state, targets[1])); }
+  try { await fs.rename(await resolvePath(state, targets[0]), await resolvePath(state, targets[1])); }
   catch (error) { return { stdout: '', stderr: 'mv: ' + error.message + '\n', exitCode: 1 }; }
   return { stdout: '', stderr: '', exitCode: 0 };
 };
@@ -748,9 +900,9 @@ async function evaluateTest(state, args) {
   if (args.length === 1) return Boolean(args[0]);
   if (args.length === 2) {
     const [flag, value] = args;
-    if (flag === '-e') return existsSync(resolvePath(state, value));
-    if (flag === '-f') { const stat = await fs.stat(resolvePath(state, value)).catch(() => null); return Boolean(stat && stat.isFile()); }
-    if (flag === '-d') { const stat = await fs.stat(resolvePath(state, value)).catch(() => null); return Boolean(stat && stat.isDirectory()); }
+    if (flag === '-e') return existsSync(await resolvePath(state, value));
+    if (flag === '-f') { const stat = await fs.stat(await resolvePath(state, value)).catch(() => null); return Boolean(stat && stat.isFile()); }
+    if (flag === '-d') { const stat = await fs.stat(await resolvePath(state, value)).catch(() => null); return Boolean(stat && stat.isDirectory()); }
     if (flag === '-z') return value === '';
     if (flag === '-n') return value !== '';
     return false;
@@ -785,7 +937,14 @@ BUILTINS.unset = async (state, args) => {
 BUILTINS.sleep = async (state, args) => {
   const seconds = Number(args[0] ?? 1);
   if (!Number.isFinite(seconds) || seconds < 0) return { stdout: '', stderr: 'sleep: 无效时长\n', exitCode: 1 };
-  await new Promise(resolve => setTimeout(resolve, Math.min(seconds * 1000, Math.max(0, remainingMs(state)))));
+  const requested = seconds * 1000;
+  const remaining = Math.max(0, remainingMs(state));
+  if (requested >= remaining) {
+    await new Promise(resolve => setTimeout(resolve, remaining));
+    state.timedOut = true;
+    return { stdout: '', stderr: '', exitCode: 124 };
+  }
+  await new Promise(resolve => setTimeout(resolve, requested));
   return { stdout: '', stderr: '', exitCode: 0 };
 };
 
@@ -828,7 +987,7 @@ export async function runBuiltinShell({ command, cwd, root, cwdLabel = '.', time
     else throw new WorkspaceError('BUILTIN_SHELL_FAILED', error instanceof Error ? error.message : String(error));
   }
   signal?.throwIfAborted();
-  const timedOut = state.timedOut || Date.now() - started > timeoutMs;
+  const timedOut = state.timedOut || Date.now() - started >= timeoutMs;
   const stdout = capText(result.stdout);
   const stderr = capText(result.stderr);
   return {

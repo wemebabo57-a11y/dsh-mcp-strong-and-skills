@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const bin = fileURLToPath(new URL('../bin/strong.mjs', import.meta.url));
 function run(args) {
-  return spawnSync(process.execPath, [bin, ...args], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 5000 });
+  return spawnSync(process.execPath, [bin, ...args], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 5000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
 }
 
 test('CLI runs locally and emits parseable skill, budget and project outputs', () => {
@@ -135,6 +135,13 @@ test('network, browser and PTC flags round-trip without hidden network calls', (
   assert.equal(JSON.parse(budget.stdout).residentTools, 4);
   const withoutBrowser = run(['budget', '--web', 'on', '--browse', 'off']);
   assert.equal(JSON.parse(withoutBrowser.stdout).residentTools, 5);
+  const privateNative = run(['config', '--mode', 'native', '--root', root, '--web-private', 'on']);
+  assert.equal(privateNative.status, 0, privateNative.stderr);
+  assert.match(privateNative.stdout, /webAllowPrivate: true/);
+  const privateMcp = run(['config', '--mode', 'mcp', '--root', root, '--web-private', 'on']);
+  assert.equal(privateMcp.status, 0, privateMcp.stderr);
+  const privateArgs = JSON.parse(privateMcp.stdout.match(/args: (.+)/)[1]);
+  assert.equal(privateArgs[privateArgs.lastIndexOf('--web-private') + 1], 'on');
   assert.equal(run(['budget', '--web', 'on', '--browse', 'on']).status, 0);
   for (const flag of ['--browse', '--ptc']) {
     const invalid = run(['budget', flag, 'always']);
@@ -144,4 +151,17 @@ test('network, browser and PTC flags round-trip without hidden network calls', (
   const invalidWeb = run(['budget', '--web', 'maybe']);
   assert.equal(invalidWeb.status, 1);
   assert.match(invalidWeb.stderr, /must be on or off/);
+});
+
+test('CLI supports version and --flag=value forms', () => {
+  for (const args of [['--version'], ['-v'], ['version']]) {
+    const result = run(args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^dsh-strong \d+\.\d+\.\d+\n$/);
+  }
+  const equals = run(['budget', '--profile=lean']);
+  assert.equal(equals.status, 0, equals.stderr);
+  assert.equal(JSON.parse(equals.stdout).residentTools, 6);
+  const separate = run(['budget', '--profile', 'lean']);
+  assert.deepEqual(JSON.parse(equals.stdout), JSON.parse(separate.stdout));
 });

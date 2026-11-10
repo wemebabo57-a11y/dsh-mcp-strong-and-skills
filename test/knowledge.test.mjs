@@ -160,3 +160,11 @@ test('native final assembly follows the current caller directory and live projec
   assert.doesNotMatch(updated.sections[0].text, /A uses TypeScript/);
   assert.equal(lookup, 2);
 });
+
+test('local knowledge search matches all terms like GitHub sources', async (t) => {
+  const { paths, config } = await fixture(t);
+  const result = await new Knowledge(paths.a, config).run({ action: 'knowledge', query: 'shared architecture' });
+  assert.ok(result.matches.some(match => match.library === 'common' && /shared keyword architecture/.test(match.text)));
+  const single = await new Knowledge(paths.a, config).run({ action: 'knowledge', query: 'architecture' });
+  assert.ok(single.matches.some(match => match.library === 'common'));
+});

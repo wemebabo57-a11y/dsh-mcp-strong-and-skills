@@ -77,6 +77,8 @@ test('ranking selects top skills, balances at two, and defaults lean to one', as
   assert.deepEqual(leanResult.skills.map(skill => skill.id), ['debug']);
   const direct = await selectSkills({ query, limit: 20 }, balanced);
   assert.equal(direct.skills.length, 2, 'The selector respects the configured body cap');
+  assert.equal(direct.appliedLimit, 2);
+  assert.match(direct.limitReason, /maxSkillLoads is 2; requested 20/);
 });
 
 test('English keywords respect word boundaries and accept simple suffixes', async () => {

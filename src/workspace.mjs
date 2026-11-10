@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fitResult } from './budget.mjs';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.nuxt', '.cache', '.npm-cache', '.turbo', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', 'target']);
 const BINARY_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.zip', '.gz', '.7z', '.exe', '.dll', '.so', '.woff', '.woff2', '.ttf', '.mp4', '.mp3', '.sqlite', '.db', '.lockb']);
@@ -72,61 +73,14 @@ function recordSkip(stats, reason, count = 1) {
 // instead of slicing serialized JSON, which can break Unicode and JSON syntax.
 function fitOutput(result, budget) {
   result.truncated = Boolean(result.truncated);
-  if (budget === Number.POSITIVE_INFINITY) return result;
-  let serialized = JSON.stringify(result);
-  const arrays = ['matches', 'warnings', 'files', 'lines', 'packages', 'configs'];
-  while (serialized.length > budget) {
-    let changed = false;
-    for (const key of arrays) {
-      if (Array.isArray(result[key]) && result[key].length > 1) {
-        result[key].pop();
-        result.omittedItems = (result.omittedItems || 0) + 1;
-        changed = true;
-        break;
-      }
-    }
-    if (!changed) {
-      const candidates = [];
-      const findStrings = (object, scripts = false) => {
-        if (!object || typeof object !== 'object') return;
-        for (const [key, value] of Object.entries(object)) {
-          if (typeof value === 'string' && value.length > 80 && (scripts || ['text', 'diff', 'message', 'note', 'scope', 'brandIntent', 'reason'].includes(key))) candidates.push({ object, key, value });
-          else if (value && typeof value === 'object') findStrings(value, key === 'scripts');
-        }
-      };
-      findStrings(result);
-      const candidate = candidates.sort((a, b) => b.value.length - a.value.length)[0];
-      if (candidate) {
-        const excess = serialized.length - budget;
-        candidate.object[candidate.key] = clip(candidate.value, Math.max(40, candidate.value.length - excess - 40));
-        changed = true;
-      }
-    }
-    if (!changed) {
-      const pkg = result.packages?.find((item) => Object.keys(item.scripts || {}).length > 1);
-      if (pkg) {
-        delete pkg.scripts[Object.keys(pkg.scripts).at(-1)];
-        pkg.omittedScripts = (pkg.omittedScripts || 0) + 1;
-        changed = true;
-      }
-    }
-    if (!changed) {
-      const key = arrays.find((key) => result[key]?.length);
-      if (key) { result[key].pop(); result.omittedItems = (result.omittedItems || 0) + 1; changed = true; }
-    }
-    result.truncated = true;
-    if (!changed) return { action: result.action, truncated: true, reason: 'Output metadata exceeded the configured budget.' };
-    serialized = JSON.stringify(result);
-  }
-  return result;
+  return fitResult(result, budget, { hint: 'Output capped; narrow the path/query or request a smaller range.' });
 }
-
 async function runGit(root, args, { signal, maxBytes = 1024 * 1024, timeoutMs = 10000 } = {}) {
   abortIfNeeded(signal);
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-C', root, ...args], {
+      child = spawn('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.quotePath=false', '-C', root, ...args], {
         shell: false,
         windowsHide: true,
         // Ambient Git variables can redirect work trees/indexes, execute helper
@@ -329,6 +283,37 @@ export class Workspace {
     return files;
   }
 
+  async _sample(root, name, stats, signal) {
+    abortIfNeeded(signal);
+    try {
+      const checked = await this._resolve(root, name, { signal });
+      if (!checked.stat.isFile()) { recordSkip(stats, 'nonFile'); return false; }
+      if (checked.stat.size > this.maxFileBytes) { recordSkip(stats, 'largeFile'); return false; }
+      const handle = await fs.open(checked.absolute, 'r');
+      try {
+        const opened = await handle.stat();
+        if (opened.dev !== checked.stat.dev || opened.ino !== checked.stat.ino) { recordSkip(stats, 'changedDuringRead'); return false; }
+        const buffer = Buffer.alloc(Math.min(8192, opened.size));
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        if (isBinary(buffer.subarray(0, bytesRead))) { recordSkip(stats, 'binary'); return false; }
+        stats.scannedFiles++;
+        return true;
+      } finally { await handle.close(); }
+    } catch (error) {
+      if (error.code === 'ABORTED') throw error;
+      recordSkip(stats, error.code === 'DISALLOWED_SYMLINK' ? 'symlink' : 'unavailable');
+      return false;
+    }
+  }
+
+  async list(selected = '.', { signal } = {}) {
+    const root = await this._root(signal);
+    const resolved = await this._resolve(root, selected, { signal });
+    const stats = { scannedFiles: 0, skipped: {}, scanLimitReached: false };
+    const files = await this._inventory(root, resolved, stats, signal);
+    return { files, stats, truncated: Boolean(stats.scanLimitReached) };
+  }
+
   async _text(root, name, stats, signal) {
     abortIfNeeded(signal);
     try {
@@ -378,14 +363,16 @@ export class Workspace {
     let truncated = false;
 
     if (args.action === 'diff') {
+      const scope = args.scope ?? 'unstaged';
+      if (!['unstaged', 'staged', 'all'].includes(scope)) throw new WorkspaceError('INVALID_ARGUMENTS', 'Diff scope must be unstaged, staged, or all.');
       // Disable user-configured external diff and text conversion executables.
-      const base = ['--literal-pathspecs', '--no-pager', 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-color', '--relative'];
+      const base = ['--literal-pathspecs', '--no-pager', 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-color', '--relative', ...(scope === 'staged' ? ['--cached'] : scope === 'all' ? ['HEAD'] : [])];
       const gitAllowed = await gitContainsRoot(root, signal);
       const filterOverrides = gitAllowed ? await disabledGitFilters(root, signal) : null;
       const names = filterOverrides !== null ? await runGit(root, [...filterOverrides, ...base, '--name-only', '-z', '--', selected.relative || '.'], { signal, maxBytes: Math.min(4 * 1024 * 1024, this.maxFiles * 1024) }) : { code: -1, stdout: '', truncated: false };
       result.available = names.code === 0 || names.truncated;
       result.diff = '';
-      result.scope = 'Unstaged tracked changes; staged and untracked content are not included.';
+      result.scope = scope === 'staged' ? 'Staged tracked changes; unstaged and untracked content are not included.' : scope === 'all' ? 'Tracked changes against HEAD; untracked content is not included.' : 'Unstaged tracked changes; staged and untracked content are not included.';
       if (!result.available) result.reason = gitAllowed && filterOverrides === null ? 'Git filter configuration could not be safely inspected.' : names.timedOut ? 'Git diff timed out.' : 'Git diff is unavailable for this workspace.';
       else {
         const changed = names.stdout.split('\0');
@@ -443,8 +430,7 @@ export class Workspace {
         result.files = [];
         result.counts = {};
         for (const name of files) {
-          const content = await this._text(root, name, stats, signal);
-          if (content === null) continue;
+          if (!(await this._sample(root, name, stats, signal))) continue;
           const extension = path.extname(name).toLowerCase() || '(none)';
           result.counts[extension] = (result.counts[extension] || 0) + 1;
           if (result.files.length < limit) result.files.push(name); else truncated = true;
@@ -474,7 +460,9 @@ export class Workspace {
       } else {
         const style = args.action === 'style';
         const entries = style ? (result.warnings = []) : (result.matches = []);
-        const query = !style ? args.query.toLowerCase() : '';
+        const query = !style ? String(args.query) : '';
+        const caseSensitive = args.caseSensitive === true;
+        const terms = !style && args.mode === 'terms' ? query.trim().split(/\s+/).filter(Boolean) : [];
         const brandIntent = typeof args.brandIntent === 'string' ? clip(args.brandIntent, 300) : this.brandIntent;
         const allowBrandColors = args.allowBrandColors === true || this.allowBrandColors || Boolean(brandIntent);
         if (style) {
@@ -501,7 +489,9 @@ export class Workspace {
                 if (entries.length >= limit) { truncated = true; break outer; }
               }
             } else {
-              const column = line.toLowerCase().indexOf(query);
+              const haystack = caseSensitive ? line : line.toLowerCase();
+              const needle = caseSensitive ? query : query.toLowerCase();
+              const column = terms.length ? (terms.every(term => haystack.includes(caseSensitive ? term : term.toLowerCase())) ? haystack.indexOf(caseSensitive ? terms[0] : terms[0].toLowerCase()) : -1) : haystack.indexOf(needle);
               if (column !== -1) {
                 const offset = this.unlimitedTokens ? 0 : Math.max(0, column - 200);
                 entries.push({ path: name, line: index + 1, column: column + 1, text: (offset ? '…' : '') + (this.unlimitedTokens ? line : clip(line.slice(offset), 700)) });

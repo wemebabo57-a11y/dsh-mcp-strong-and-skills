@@ -215,3 +215,42 @@ test('ambient Git redirection, injected config, external helpers, and trace logg
   const map = await workspace.run({ action: 'map' });
   assert.equal(map.ignoreSource, 'git');
 });
+
+
+
+test('search supports all-terms mode and case sensitivity without changing literal defaults', async (t) => {
+  const root = await fixture(t, { 'src/terms.js': 'Alpha filler Beta\nALPHA only\nalpha lower\n' });
+  const workspace = new Workspace(root);
+  const literal = await workspace.run({ action: 'search', query: 'alpha beta' });
+  assert.equal(literal.matches.length, 0);
+  const terms = await workspace.run({ action: 'search', query: 'alpha beta', mode: 'terms' });
+  assert.deepEqual(terms.matches.map((entry) => entry.line), [1]);
+  const sensitive = await workspace.run({ action: 'search', query: 'Alpha', caseSensitive: true });
+  assert.deepEqual(sensitive.matches.map((entry) => entry.line), [1]);
+  const insensitive = await workspace.run({ action: 'search', query: 'Alpha' });
+  assert.deepEqual(insensitive.matches.map((entry) => entry.line), [1, 2, 3]);
+});
+
+test('diff scope distinguishes staged, unstaged and HEAD changes and preserves non-ASCII paths', { skip: !hasGit }, async (t) => {
+  const root = await fixture(t, { 'a.txt': 'old a\n', 'b.txt': 'old b\n', '测试文件.txt': 'old c\n' });
+  git(root, ['init', '--quiet']);
+  git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'add', '.']);
+  git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'fixture']);
+  await fs.writeFile(path.join(root, 'a.txt'), 'new staged a\n');
+  git(root, ['add', 'a.txt']);
+  await fs.writeFile(path.join(root, 'b.txt'), 'new unstaged b\n');
+  await fs.writeFile(path.join(root, '测试文件.txt'), 'new unicode c\n');
+  const workspace = new Workspace(root);
+  const unstaged = await workspace.run({ action: 'diff' });
+  assert.match(unstaged.diff, /new unstaged b/);
+  assert.equal(unstaged.diff.includes('new staged a'), false);
+  assert.match(unstaged.diff, /测试文件\.txt/);
+  const staged = await workspace.run({ action: 'diff', scope: 'staged' });
+  assert.match(staged.diff, /new staged a/);
+  assert.equal(staged.diff.includes('new unstaged b'), false);
+  const all = await workspace.run({ action: 'diff', scope: 'all' });
+  assert.match(all.diff, /new staged a/);
+  assert.match(all.diff, /new unstaged b/);
+  assert.match(all.diff, /测试文件\.txt/);
+  await assert.rejects(workspace.run({ action: 'diff', scope: 'sideways' }), { code: 'INVALID_ARGUMENTS' });
+});

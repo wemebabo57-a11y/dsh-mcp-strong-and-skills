@@ -15,6 +15,7 @@ export function createConfigSchema(z) {
     modelPreset: choices(['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'], 'auto', '模型指导预设；不切换实际模型'),
     toolSet: choices(['compact', 'expanded'], 'expanded', '工具集合：基础 2 个或扩展 6 个；可选 Shell 另计'),
     webTool: z.boolean().default(true).description('扩展模式下提供 strong_web：搜索返回 JSON 结果，open 按 id 或网址抓正文').volatile(),
+    webAllowPrivate: z.boolean().default(false).description('允许 strong_web 访问 localhost/内网；默认关闭以防 SSRF').volatile(),
     browseTool: choices(['auto', 'on', 'off'], 'auto', 'strong_browse 真实无头浏览器：auto 只给视觉模型注册并返回截图，off 关闭，on 强制开启'),
     ptcMode: choices(['auto', 'on', 'off'], 'auto', 'PTC 模式提示：auto 只在宿主提供 run_code 时附加'),
     browserPath: z.string().max(1000).default('').description('可选：Chrome/Edge/Brave 可执行文件绝对路径；留空自动发现').volatile(),

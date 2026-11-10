@@ -1,6 +1,18 @@
 # DeepSeek Harness compatibility
 
-Initial contract review on 2026-10-24; updated for v0.4.0 on 2026-11-08 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
+Initial contract review on 2026-10-24; updated for v0.4.1 on 2026-11-10 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
+
+## 0.4.1 security, lifecycle and budget hardening — 2026-11-10
+
+Version 0.4.1 is a maintenance release with no new resident tools. The expanded surface remains six entries by default and seven with the optional shell. It fixes cross-project state, untrusted network and path handling, browser lifecycle races, and duplicated validation/output budgeting while preserving the 0.4.0 feature set.
+
+`strong_web` now scopes search cache entries and `r1…rN` aliases to each workspace root and resolves aliases only from that root's latest search; the root cache has TTL and LRU bounds. By default it rejects localhost, loopback, RFC1918/private, link-local, and cloud metadata addresses, rechecks every redirect hop, and exposes `webAllowPrivate` as an explicit opt-in. Responses are streamed with a 2 MB abort bound and decoded using the HTTP/meta charset; entity decoding is safe for invalid code points; search results are deduplicated by canonical URL.
+
+`strong_review` and `strong_context diff` pass `core.quotePath=false` and decode Git C-quoted octal paths, so non-ASCII, spaced, and escaped filenames remain visible. `strong_browse` deduplicates concurrent launches with a pending-session promise, kills the child and removes the temporary profile on launch failure, serializes `close` through the session queue, keeps screenshots in a per-session directory with sequence names, and removes them with the profile. `type` uses CDP `Input.insertText`, `fullPage` is supported, and PageUp/PageDown/Home/End/Delete plus corrected scroll/wait semantics are available.
+
+Workspace and code tools use a content-free listing/sampling path for maps and inventories instead of reading every file, share a single output budgeter, expose `diff` scopes (`unstaged`, `staged`, `all`) and search modes (`literal`, `terms`, `caseSensitive`), and derive symbol-limit notes from the active profile. Engine, code, and shell tools share one argument validator. Shell backend probing is cached by platform/backend/executable/WSL distribution/PATH, the builtin shell resolves real paths before allowing file operations and adds `sort`, `uniq`, `tr`, and `cut`, and MCP frames are collected in chunks and joined once. Vision capability caching has a five-minute TTL with bounded eviction, and browse policy hints follow actual registration. The CLI supports `--version`, `-v`, `version`, `--flag=value`, and `--web-private on|off`; skills report `appliedLimit` and `limitReason`; local knowledge search uses all-term matching, inherits configured scan limits, and memoizes project policy parsing.
+
+Verification in this working copy: **164 automated tests**, including cross-root web cache isolation, SSRF and entity safety, non-ASCII diff paths, diff scopes, terms search, code methods, builtin text helpers and link-escape rejection, shell cache identity, browser schema, CLI version/equals forms, and knowledge term matching. `node scripts/check.mjs` passes with 6 tools / 1,473 estimated tokens, 2 tools / 562 tokens, 7 tools / 1,798 tokens, and 3 tools / 886 tokens. No model inference was sent.
 
 ## 0.4.0 web, headless browser, built-in Bash and PTC — 2026-11-08
 

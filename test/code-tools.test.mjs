@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { Workspace } from '../src/workspace.mjs';
-import { EXTRA_TOOLS, runCodeTool } from '../src/code-tools.mjs';
+import { EXTRA_TOOLS, gitQuoted, runCodeTool } from '../src/code-tools.mjs';
 
 async function fixture(t, files = {}) {
   const tempRoot = await fs.realpath(os.tmpdir());
@@ -247,4 +247,35 @@ test('review distinguishes diff-like source lines and records mode-only files wi
   assert.deepEqual(result.files, [{ path: 'source file.js', added: 3, removed: 1 }, { path: 'mode only.js', added: 0, removed: 0 }]);
   assert.equal(result.findings[0].path, 'source file.js');
   assert.equal(result.findings[0].line, 2);
+});
+
+
+test('strong_review preserves non-ASCII paths and decodes Git C-quoted names', { skip: !hasGit }, async (t) => {
+  const slash = String.fromCharCode(92);
+  const quoted = '"' + ['346', '265', '213', '350', '257', '225', '346', '226', '207', '344', '273', '266'].map((octal) => slash + octal).join('') + '.txt"';
+  assert.equal(gitQuoted(quoted), '测试文件.txt');
+  const root = await fixture(t, { '测试文件.txt': 'const value = 1;\n' });
+  git(root, 'init', '--quiet');
+  git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'fixture');
+  await fs.writeFile(path.join(root, '测试文件.txt'), 'const value = 2;\n');
+  const result = await runCodeTool('strong_review', { path: '测试文件.txt' }, { workspace: new Workspace(root) });
+  assert.equal(result.files[0].path, '测试文件.txt');
+  assert.equal(result.files[0].added, 1);
+});
+
+test('symbols include class and object methods', async (t) => {
+  const root = await fixture(t, {
+    'methods.js': [
+      'class Service {',
+      '  async load(id) { return id; }',
+      '  static create() { return new Service(); }',
+      '}',
+      'const object = {',
+      '  run(value) { return value; }',
+      '};',
+    ].join('\n'),
+  });
+  const result = await code(new Workspace(root), { action: 'symbols', path: 'methods.js' });
+  assert.deepEqual(result.items.filter((item) => item.kind === 'method').map(({ name, line }) => [name, line]), [['load', 2], ['create', 3], ['run', 6]]);
 });

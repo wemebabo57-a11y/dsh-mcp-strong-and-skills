@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { SHELL_TOOL, buildShellPolicy, resolveShell, runShellTool } from '../src/shell-tool.mjs';
+import { SHELL_TOOL, buildShellPolicy, clearShellCache, resolveShell, runShellTool } from '../src/shell-tool.mjs';
 
 async function workspace(t) {
   const parent = await fs.realpath(os.tmpdir());
@@ -96,4 +96,18 @@ test('times out and aborts real child processes without leaving the run pending'
   const running = runShellTool({ command: 'sleep 5' }, { root, signal: controller.signal });
   setTimeout(() => controller.abort(new Error('test abort')), 200);
   await assert.rejects(running, error => error.message === 'test abort');
+});
+
+test('shell resolution is cached by backend and executable settings', async () => {
+  clearShellCache();
+  try {
+    const first = await resolveShell({ backend: 'auto' });
+    const second = await resolveShell({ backend: 'auto' });
+    assert.equal(first, second);
+    clearShellCache();
+    const third = await resolveShell({ backend: 'auto' });
+    assert.notEqual(first, third);
+  } finally {
+    clearShellCache();
+  }
 });

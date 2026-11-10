@@ -22,6 +22,7 @@ export const BROWSE_TOOL = Object.freeze({
       key: { type: 'string', maxLength: 20 },
       y: { type: 'number' },
       ms: { type: 'integer', minimum: 0, maximum: 30000 },
+      fullPage: { type: 'boolean' },
       maxChars: { type: 'integer', minimum: 500, maximum: 20000 },
     },
     required: ['action'],
@@ -30,6 +31,7 @@ export const BROWSE_TOOL = Object.freeze({
 });
 
 const sessions = new Map();
+const pendingSessions = new Map();
 const children = new Set();
 
 function browserCandidates() {
@@ -144,25 +146,39 @@ async function launch(executable) {
   ];
   const child = spawn(executable, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: false });
   children.add(child);
-  let buffer = '';
-  let port = 0;
-  const wsUrl = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new WorkspaceError('BROWSER_TIMEOUT', '浏览器启动超时。')), 20000);
-    const onData = chunk => {
-      buffer += String(chunk);
-      const match = /DevTools listening on (ws:\/\/[^\s]+)/.exec(buffer);
-      if (!match) return;
-      const parsed = /:(\d+)\//.exec(match[1]);
-      port = parsed ? Number(parsed[1]) : 0;
-      clearTimeout(timer);
-      resolve(match[1]);
-    };
-    child.stderr.on('data', onData);
-    child.stdout.on('data', onData);
-    child.once('error', error => { clearTimeout(timer); reject(new WorkspaceError('BROWSER_LAUNCH_FAILED', '无法启动浏览器：' + error.message)); });
-    child.once('close', code => { clearTimeout(timer); reject(new WorkspaceError('BROWSER_LAUNCH_FAILED', '浏览器提前退出（' + code + '）。')); });
-  });
-  return { child, profile, port, wsUrl };
+  try {
+    let buffer = '';
+    let port = 0;
+    const wsUrl = await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error); else resolve(value);
+      };
+      const timer = setTimeout(() => finish(new WorkspaceError('BROWSER_TIMEOUT', '浏览器启动超时。')), 20000);
+      const onData = chunk => {
+        buffer += String(chunk);
+        const match = /DevTools listening on (ws:\/\/[^\s]+)/.exec(buffer);
+        if (!match) return;
+        const parsed = /:(\d+)\//.exec(match[1]);
+        port = parsed ? Number(parsed[1]) : 0;
+        finish(null, match[1]);
+      };
+      child.stderr.on('data', onData);
+      child.stdout.on('data', onData);
+      child.once('error', error => finish(new WorkspaceError('BROWSER_LAUNCH_FAILED', '无法启动浏览器：' + error.message)));
+      child.once('close', code => finish(new WorkspaceError('BROWSER_LAUNCH_FAILED', '浏览器提前退出（' + code + '）。')));
+    });
+    return { child, profile, port, wsUrl };
+  } catch (error) {
+    try { child.kill('SIGKILL'); } catch {}
+    children.delete(child);
+    await delay(80);
+    await fs.rm(profile, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 function pageTarget(list) {
@@ -183,7 +199,7 @@ async function startSession(executable) {
     await cdp.send('Page.enable').catch(() => {});
     await cdp.send('Runtime.enable').catch(() => {});
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
-    return { executable, cdp, ...launched, queue: Promise.resolve(), lastUsed: Date.now(), shotDir: path.join(os.tmpdir(), 'dsh-strong-browse') };
+    return { executable, cdp, ...launched, queue: Promise.resolve(), pending: 0, lastUsed: Date.now(), shotSeq: 0, shotDir: path.join(launched.profile, 'shots') };
   } catch (error) {
     try { launched.child.kill('SIGKILL'); } catch {}
     children.delete(launched.child);
@@ -193,29 +209,49 @@ async function startSession(executable) {
 }
 
 async function closeSession(session) {
-  session.cdp.close();
-  try { session.child.kill('SIGKILL'); } catch {}
-  children.delete(session.child);
-  await delay(80);
-  await fs.rm(session.profile, { recursive: true, force: true }).catch(() => {});
+  if (session.closing) return session.closing;
+  session.closing = (async () => {
+    session.cdp.close();
+    try { session.child.kill('SIGKILL'); } catch {}
+    children.delete(session.child);
+    await delay(80);
+    await fs.rm(session.profile, { recursive: true, force: true }).catch(() => {});
+  })();
+  return session.closing;
+}
+
+async function closeQueued(session) {
+  const work = session.queue.then(() => closeSession(session));
+  session.queue = work.catch(() => {});
+  return work;
 }
 
 async function sessionFor(root, options) {
   const existing = sessions.get(root);
   if (existing && !existing.cdp.closed) { existing.lastUsed = Date.now(); return existing; }
   if (existing) sessions.delete(root);
-  const executable = options.browserPath || findBrowser();
-  if (!executable) throw new WorkspaceError('BROWSER_NOT_FOUND', '没有找到 Chrome、Edge 或 Brave。请安装其中之一，或在设置里填写浏览器路径。');
-  const session = await startSession(executable);
-  session.timer = setInterval(() => {
-    if (Date.now() - session.lastUsed < IDLE_MS) return;
-    clearInterval(session.timer);
-    sessions.delete(root);
-    closeSession(session).catch(() => {});
-  }, 30000);
-  session.timer.unref?.();
-  sessions.set(root, session);
-  return session;
+  const pending = pendingSessions.get(root);
+  if (pending) return pending;
+  const promise = (async () => {
+    const executable = options.browserPath || findBrowser();
+    if (!executable) throw new WorkspaceError('BROWSER_NOT_FOUND', '没有找到 Chrome、Edge 或 Brave。请安装其中之一，或在设置里填写浏览器路径。');
+    const session = await startSession(executable);
+    session.timer = setInterval(() => {
+      if (session.pending > 0 || Date.now() - session.lastUsed < IDLE_MS) return;
+      clearInterval(session.timer);
+      sessions.delete(root);
+      closeSession(session).catch(() => {});
+    }, 30000);
+    session.timer.unref?.();
+    sessions.set(root, session);
+    return session;
+  })();
+  pendingSessions.set(root, promise);
+  try {
+    return await promise;
+  } finally {
+    pendingSessions.delete(root);
+  }
 }
 
 async function evaluate(cdp, expression) {
@@ -240,15 +276,23 @@ function clip(text, maxChars) {
   return { text: value.slice(0, maxChars), truncated: value.length > maxChars };
 }
 
-async function shot(cdp, session) {
-  const result = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+async function shot(cdp, session, fullPage = false) {
+  const result = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: Boolean(fullPage) });
   await fs.mkdir(session.shotDir, { recursive: true });
-  const file = path.join(session.shotDir, 'shot-' + Date.now() + '.png');
+  session.shotSeq += 1;
+  const file = path.join(session.shotDir, 'shot-' + session.shotSeq + '.png');
   await fs.writeFile(file, Buffer.from(result.data, 'base64'));
-  return { path: file, mediaType: 'image/png', width: VIEWPORT.width, height: VIEWPORT.height };
+  let width = VIEWPORT.width;
+  let height = VIEWPORT.height;
+  if (fullPage) {
+    const metrics = await cdp.send('Page.getLayoutMetrics').catch(() => null);
+    const size = metrics?.cssContentSize;
+    if (size) { width = Math.round(size.width); height = Math.round(size.height); }
+  }
+  return { path: file, mediaType: 'image/png', width, height, fullPage: Boolean(fullPage) };
 }
 
-const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39 };
+const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, PageUp: 33, PageDown: 34, Home: 36, End: 35, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39 };
 
 async function pressKey(cdp, key) {
   const code = KEY_CODES[key];
@@ -262,7 +306,21 @@ function selectorExpression(selector, text, mode) {
     ? 'document.querySelector(' + JSON.stringify(selector) + ')'
     : '[...document.querySelectorAll("a,button,input,textarea,[role=button]")].find(el => (el.innerText || el.value || el.getAttribute("aria-label") || "").includes(' + JSON.stringify(text ?? '') + '))';
   if (mode === 'click') return '(' + find + ')?.click(), true';
-  return '(el => { if (!el) return false; el.focus(); const value = ' + JSON.stringify(text ?? '') + '; el.value = value; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); return true; })(' + find + ')';
+  return '(el => { if (!el) return false; el.focus(); if (el.select) el.select(); return true; })(' + find + ')';
+}
+
+async function typeText(cdp, selector, text) {
+  const focus = selectorExpression(selector, text, 'focus');
+  const found = await evaluate(cdp, focus);
+  if (!found) return false;
+  const value = String(text ?? '');
+  try {
+    await cdp.send('Input.insertText', { text: value });
+  } catch {
+    await evaluate(cdp, '(el => { if (!el) return false; const setter = Object.getOwnPropertyDescriptor(el.__proto__, "value")?.set; if (setter) setter.call(el, ' + JSON.stringify(value) + '); else el.value = ' + JSON.stringify(value) + '; el.dispatchEvent(new Event("input", { bubbles: true })); return true; })(document.activeElement)');
+  }
+  await evaluate(cdp, '(() => { const el = document.activeElement; if (el) el.dispatchEvent(new Event("change", { bubbles: true })); return true; })()').catch(() => {});
+  return true;
 }
 
 async function runAction(session, args) {
@@ -287,7 +345,7 @@ async function runAction(session, args) {
   }
   if (action === 'screenshot') {
     const state = await evaluate(session.cdp, PAGE_STATE);
-    const image = await shot(session.cdp, session);
+    const image = await shot(session.cdp, session, args.fullPage === true);
     return { action, url: state.url, title: state.title, screenshot: image, note: '截图已保存：' + image.path };
   }
   if (action === 'click') {
@@ -299,7 +357,7 @@ async function runAction(session, args) {
     return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated };
   }
   if (action === 'type') {
-    const done = await evaluate(session.cdp, selectorExpression(args.selector, args.text, 'type'));
+    const done = await typeText(session.cdp, args.selector, args.text);
     if (!done) throw new WorkspaceError('BROWSER_TARGET_MISSING', '没找到输入框，请给出 selector。');
     return { action, typed: String(args.text ?? '').length };
   }
@@ -311,13 +369,15 @@ async function runAction(session, args) {
     return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated };
   }
   if (action === 'scroll') {
-    const offset = Number(args.y ?? 600) || 600;
+    const offset = Number.isFinite(Number(args.y ?? 600)) ? Number(args.y ?? 600) : 600;
     const position = await evaluate(session.cdp, 'window.scrollBy(0, ' + offset + '), window.scrollY');
     return { action, scrollY: position };
   }
   if (action === 'wait') {
-    await delay(Math.min(Math.max(Number(args.ms ?? 1000) || 0, 0), 30000));
-    return { action, waitedMs: Number(args.ms ?? 1000) };
+    const requested = Math.min(Math.max(Number(args.ms ?? 1000) || 0, 0), 30000);
+    const started = Date.now();
+    await delay(requested);
+    return { action, waitedMs: Date.now() - started };
   }
   throw new WorkspaceError('INVALID_ARGUMENTS', '不支持的 action：' + action);
 }
@@ -328,15 +388,18 @@ export async function runBrowseTool(args = {}, { root = '', config = {}, signal 
   if (!action) throw new WorkspaceError('INVALID_ARGUMENTS', '需要 action。');
   const key = typeof root === 'string' && root ? root : '(default)';
   if (action === 'close') {
+    const launched = pendingSessions.get(key);
+    if (launched) await launched.catch(() => {});
     const session = sessions.get(key);
     if (!session) return { action, closed: true, note: '当前没有运行中的浏览器。' };
     sessions.delete(key);
     clearInterval(session.timer);
-    await closeSession(session);
+    await closeQueued(session);
     return { action, closed: true };
   }
   const session = await sessionFor(key, config);
   session.lastUsed = Date.now();
+  session.pending += 1;
   const work = session.queue.then(async () => {
     signal?.throwIfAborted();
     const result = await runAction(session, args);
@@ -349,6 +412,8 @@ export async function runBrowseTool(args = {}, { root = '', config = {}, signal 
   } catch (error) {
     session.lastUsed = Date.now();
     throw error;
+  } finally {
+    session.pending = Math.max(0, session.pending - 1);
   }
 }
 
