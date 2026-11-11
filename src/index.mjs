@@ -4,6 +4,8 @@ import { StrongEngine, ALL_TOOLS, BASE_TOOLS } from './engine.mjs';
 import { snapshotConfig, loadNativeConfigSchema } from './native-config.mjs';
 import { registerSettingsHost } from './settings-host.mjs';
 import { installNativePolicy } from './native-policy.mjs';
+import { resolveShellSandbox } from './sandbox.mjs';
+import { installShellAdoption } from './adoption.mjs';
 
 export const name = 'strong-skills';
 export const inject = ['tools', 'systemPrompt', 'workingDirectory'];
@@ -100,6 +102,7 @@ export function apply(ctx, options = {}) {
   snapshotConfig(options); // Fail invalid composition before contributing anything.
   const currentConfig = () => snapshotConfig(options);
   registerSettingsHost(ctx);
+  installShellAdoption(ctx, currentConfig);
   installNativePolicy(ctx, currentConfig, { browseAvailable: selection => {
     const config = currentConfig();
     if (config.browseTool === 'on') return true;
@@ -118,7 +121,9 @@ export function apply(ctx, options = {}) {
           ? await ctx.workingDirectory.ensure(execution.agent, execution.signal)
           : ctx.workingDirectory.defaultDirectory;
         // Resolve caller cwd on each call: session directory changes must take effect.
-        let value = await new StrongEngine(root, currentConfig()).call(tool.name, args, { signal: execution.signal });
+        // Shell executions inherit the host session's sandbox policy; failures fail closed.
+        const sandbox = tool.name === 'strong_shell' ? await resolveShellSandbox(ctx, execution, root) : null;
+        let value = await new StrongEngine(root, currentConfig()).call(tool.name, args, { signal: execution.signal, sandbox });
         if (tool.name === 'strong_browse') {
           const attached = await attachScreenshot(ctx, execution, value);
           value = attached.value;

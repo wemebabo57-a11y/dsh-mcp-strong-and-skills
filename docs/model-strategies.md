@@ -32,7 +32,7 @@ DeepSeek 的 API thinking 与 reasoning effort 由宿主模型设置控制。插
 | --- | --- | --- |
 | `claudeMode` | 开启，所有模型可用 | 前端参考清晰层级、留白、温暖中性色和克制强调色；用户与品牌优先。增强思考开启时，还引导明确目标、依据证据分解行动并验证 |
 | `weNeedToThinking` | **仅需开启；所有模型生效，不依赖增强思考或模型名称** | 先写下 `We need to …` 目标，再按目标、事实与假设、最小证据、行动、验证、风险展开 |
-| `unlimitedTokens` | **仅需开启；所有模型生效，独立于增强思考** | 取消本插件输出/读取预算，强制 6 个默认工具与最多 8 个技能（可选 Shell 另计），要求完整规划、实现与尽可能全面的验证 |
+| `unlimitedTokens` | **仅需开启；所有模型生效，独立于增强思考** | 取消本插件输出/读取预算，强制 6 个默认工具与最多 8 个技能（Shell 工具另计），要求完整规划、实现与尽可能全面的验证 |
 
 ### we need to 思维
 
@@ -42,7 +42,7 @@ DeepSeek 的 API thinking 与 reasoning effort 由宿主模型设置控制。插
 
 ### 无限 token 模式
 
-开启后强制扩展工具集（6 个默认入口；若另开附加 Shell 则为 7 个），普通模式的 `lean`/`balanced`/`thorough` 输出与扫描上限被绕过：工具结果不截断，工作区最多 5,000 文件、单文件 262,144 字节、读取最多 5,000 行，`strong_code`/`strong_review` 使用更高预算，单次最多读取 8 个技能正文。增强思考开启时自动按 `deep` 处理。
+开启后强制扩展工具集（6 个默认入口；若另开 Shell 工具则为 7 个），普通模式的 `lean`/`balanced`/`thorough` 输出与扫描上限被绕过：工具结果不截断，工作区最多 5,000 文件、单文件 262,144 字节、读取最多 5,000 行，`strong_code`/`strong_review` 使用更高预算，单次最多读取 8 个技能正文。增强思考开启时自动按 `deep` 处理。
 
 “无限”仅指本插件不再主动节省 token；服务商上下文窗口、API 计费、宿主权限和模型自身输出限制仍然存在。它适合完整阅读、系统重构和深度审查，不建议作为日常默认。
 
@@ -50,10 +50,10 @@ DeepSeek 的 API thinking 与 reasoning effort 由宿主模型设置控制。插
 
 上下文增量采用字符启发式估算，不是 tokenizer 或计费统计：
 
-- 默认均衡扩展配置约 **1,270 tokens**；`lean` + 精简工具 + 关闭增强思考约 **643 tokens**。
-- Claude 模式约增加 **173 tokens**；we need to 模式约增加 **157 tokens**；两者同时开启约增加 **330 tokens**，总计约 **1,600 tokens**。
-- `deepseek-flash` 均衡扩展配置约 **1,358 tokens**，同时开启两个模式约 **1,689 tokens**。
-- 无限模式默认约 **1,550 tokens**；精简工具并关闭增强思考时约 **1,172 tokens**，但结果与读取范围不再截断。
+- 默认均衡扩展配置约 **1,383 tokens**；精简工具 + 关闭增强思考约 **517 tokens**；开启 Shell 后约 **1,753 tokens**，精简 + Shell 约 **888 tokens**。
+- Claude 模式约增加 **125 tokens**；we need to 模式约增加 **84 tokens**；两者同时开启约增加 **208 tokens**，总计约 **1,591 tokens**。
+- `deepseek-flash` 均衡扩展配置约 **1,437 tokens**，`deepseek-v4-pro` 约 **1,436 tokens**。
+- 无限模式默认约 **1,571 tokens**；无限 + 精简工具 + 关闭增强思考约 **1,307 tokens**，但结果与读取范围不再截断。
 
 模式默认关闭，因此普通默认预算不受影响。`budgetReport` 会区分“请求开启”和“实际生效”，无限模式还报告 `maxResultChars: "unlimited"`、`maxFiles: 5,000` 与 `maxSkillLoads: 8`。
 

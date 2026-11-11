@@ -13,7 +13,7 @@ export function createConfigSchema(z) {
     thinkingLevel: choices(['balanced', 'deep'], 'balanced', '增强程度；不改写模型 API reasoning effort'),
     clarification: choices(['auto', 'more', 'few'], 'more', '关键信息不明时的澄清偏好'),
     modelPreset: choices(['auto', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'generic'], 'auto', '模型指导预设；不切换实际模型'),
-    toolSet: choices(['compact', 'expanded'], 'expanded', '工具集合：基础 2 个或扩展 6 个；可选 Shell 另计'),
+    toolSet: choices(['compact', 'expanded'], 'expanded', '工具集合：基础 2 个或扩展 6 个；Shell 另计，不进本工具集'),
     webTool: z.boolean().default(true).description('扩展模式下提供 strong_web：搜索返回 JSON 结果，open 按 id 或网址抓正文').volatile(),
     webAllowPrivate: z.boolean().default(false).description('允许 strong_web 访问 localhost/内网；默认关闭以防 SSRF').volatile(),
     browseTool: choices(['auto', 'on', 'off'], 'auto', 'strong_browse 真实无头浏览器：auto 只给视觉模型注册并返回截图，off 关闭，on 强制开启'),
@@ -21,8 +21,8 @@ export function createConfigSchema(z) {
     browserPath: z.string().max(1000).default('').description('可选：Chrome/Edge/Brave 可执行文件绝对路径；留空自动发现').volatile(),
     // No schema default: an old profile with bashTool: true must arrive with
     // shellTool undefined so resolveConfig can migrate it. The core default is false.
-    shellTool: z.boolean().description('启用附加 Shell 工具 strong_shell（默认关闭）；不替换 DSH 默认 shell，也不改变原生命令与文件工具').volatile(),
-    shellBackend: choices(['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd', 'builtin'], 'auto', 'Shell 后端；内置 Bash 不依赖系统 Shell；自动在 Windows 优先 Git Bash，其次 WSL、PowerShell、cmd，最后内置 Bash'),
+    shellTool: z.boolean().description('启用后 AI 直接使用 strong_shell 执行 shell 命令，不再自行改用宿主原生 shell（默认关闭）：更快、返回结构化结果；命令继承 DSH 沙箱策略，只读/工作区写入模式会拒绝越权写入').volatile(),
+    shellBackend: choices(['auto', 'git-bash', 'wsl', 'bash', 'pwsh', 'cmd', 'builtin'], 'auto', 'Shell 后端；选固定值后 AI 直接使用该后端，不再询问或改用其他 shell；自动在 Windows 优先 Git Bash，其次 WSL、PowerShell、cmd，最后内置 Bash'),
     shellPath: z.string().max(1000).default('').description('可选：Shell 可执行文件的绝对路径；留空自动发现').volatile(),
     wslDistro: z.string().max(100).default('').description('可选：WSL 发行版名称；留空使用默认发行版').volatile(),
     bashTool: z.boolean().description('旧版兼容字段；等价于 shellTool，显式 shellTool 优先').volatile(),

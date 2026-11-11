@@ -75,16 +75,17 @@ test('all model routes receive the same universal core before any DeepSeek playb
   assert.doesNotMatch(generic, /Pro：|Flash：/);
 });
 
-test('DeepSeek playbooks use only tools available in their selected tool set', () => {
-  for (const modelPreset of ['deepseek-v4-pro', 'deepseek-v4.1-flash-1017']) {
+test('thinking guidance never names tools, so tool-set routing has a single owner', () => {
+  const toolNames = /strong_code|strong_review|strong_context|strong_web|strong_browse|strong_shell/;
+  for (const modelPreset of MODEL_PRESETS) {
     const expanded = buildEnhancementPolicy({ modelPreset, toolSet: 'expanded' });
     const compact = buildEnhancementPolicy({ modelPreset, toolSet: 'compact' });
-    assert.match(expanded, /strong_code/);
-    assert.match(expanded, /strong_review/);
-    assert.match(compact, /strong_context/);
-    assert.doesNotMatch(compact, /strong_code|strong_review/);
-    assert.notEqual(compact, expanded);
+    // buildPolicy() alone decides which routing hints are advertised, so the same
+    // guidance can never mention a tool the active tool set does not register.
+    assert.equal(compact, expanded, modelPreset);
+    assert.doesNotMatch(expanded, toolNames, modelPreset);
   }
+  assert.notEqual(buildEnhancementPolicy({ modelPreset: 'deepseek-v4-pro' }), buildEnhancementPolicy({ modelPreset: 'generic' }));
 });
 
 test('off removes every added thinking, planning and clarification instruction', () => {
@@ -116,8 +117,10 @@ test('all default model presets stay within a small reproducible incremental tok
   for (const modelPreset of MODEL_PRESETS) {
     for (const toolSet of ['compact', 'expanded']) {
       const config = Object.freeze({ modelPreset, toolSet });
-      assert.ok(estimateTokens(buildEnhancementPolicy(config)) < 450, `${modelPreset}/${toolSet}`);
-      assert.ok(estimateTokens(buildEnhancementPolicy({ ...config, thinkingLevel: 'deep' })) <= 500, `${modelPreset}/${toolSet}`);
+      // Tightened ceilings: the block is resident on every request, so growth here
+      // is paid for by every user turn.
+      assert.ok(estimateTokens(buildEnhancementPolicy(config)) <= 270, `${modelPreset}/${toolSet}`);
+      assert.ok(estimateTokens(buildEnhancementPolicy({ ...config, thinkingLevel: 'deep' })) <= 330, `${modelPreset}/${toolSet}`);
       assert.deepEqual(config, { modelPreset, toolSet });
     }
   }

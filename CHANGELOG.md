@@ -1,5 +1,22 @@
 # 更新记录
 
+## 0.4.3-preview.1 — 2026-11-12（0.4.3 预览版）
+
+包版本：`0.4.3-preview.1`。工具面与开关不变：默认 6 个入口，开启 Shell 后 7 个；本版集中修复“装了插件但 AI 不用”、Shell 绕过沙箱、输出被二次截断、搜索等待过久与提示词常驻开销。
+
+- **Shell 成为默认执行路径**：开启「Shell 工具」后，插件注册常驻路由说明；同时安装 `tools/pre-execute` 拦截，凡宿主原生 `bash`/`pwsh` 调用且 `strong_shell` 对当前 Agent 可见，一律拒绝并提示改用 `strong_shell` 与设置中的后端。Shell 关闭、工具被限制、没有 Agent 或宿主不提供事件服务时不拦截，避免影响 MCP/旧宿主。
+- **Shell 继承 DSH 沙箱**：每次调用按当前会话解析 `sandboxPolicy`；`danger-full-access` 才无约束执行，`read-only`/`workspace-write` 通过宿主 `ctx.sandbox.confine` 生成的 `argv` 启动，并使用其拒绝签名与运行器失败规则。缺少沙箱服务或 `workspaceRoot` 时返回 `SANDBOX_UNAVAILABLE` 并拒绝执行，不再静默降级为当前用户权限。内置 Bash 的进程内写入在只读模式下直接拒绝，外部程序同样包装。
+- **输出真正达到 64 KiB 且保留首尾**：每路仍收集 64 KiB，但改为保留前 1/4 与后 3/4，插入省略字节标记；`StrongEngine` 不再把 `strong_shell` 结果交给 `fitResult(maxOutputChars)` 二次截断，`thorough` 下不再只剩约 9.4K 字符。结果保持合法 JSON，`stdoutTruncated`/`stderrTruncated` 继续可用，hint 建议缩小命令或直接看尾部。
+- **后台子进程不再拖住调用**：直接子进程退出后只留短暂排空窗口即完成，孙进程继续持有 stdout 时销毁管道；`sleep 4 & echo started` 可快速返回，`&` + `wait` 仍按超时处理。
+- **编码回退**：输出先按严格 UTF-8 解码，失败后尝试 GBK，再退回有损 UTF-8；`chcp 936` 的中文输出不再变成乱码。
+- **Windows 沙箱兼容**：DSH 的 Windows ACL 受限令牌运行器无法启动 Git Bash（MSYS 报 `couldn't create signal pipe, Win32 error 5`）。`auto` 在受限模式下改用插件内置 Bash；固定 `git-bash` 返回可操作的 `SHELL_UNAVAILABLE`，不再无约束执行或返回空输出。PowerShell 5.1 加入 `pwsh` 候选，Electron 宿主的沙箱运行器会保留 `ELECTRON_RUN_AS_NODE` 与宿主 `NODE_OPTIONS` preload。
+- **内置 Bash 补齐常用命令**：新增 `printf`（格式、宽度、精度、转义）、`seq`（步长、补零、格式）与 `exit`，避免这些命令落到沙箱下无法启动的 MSYS 可执行文件。
+- **搜索并发竞速**：`strong_web` 的 DuckDuckGo 与 Bing 改为同时发起，首个非空结果获胜并中止另一方；单引擎 4 秒、整体 8 秒上限。本机此前每次未命中缓存都要等 DuckDuckGo 连接超时约 11 秒，实测 5 个查询中位耗时从 11,079 ms 降到 251 ms，首条结果一致。页面打开仍保留 15 秒、2 MB、SSRF/DNS 检查与 10 分钟缓存。
+- **提示词继续压缩**：常驻策略、设计/思考/模式块、PTC 与 Shell 说明合计从 1,403 字符 / 1,179 tokens 降到 1,094 字符 / 894 tokens（约 −22% / −24%）；含工具 schema 的默认扩展面从 1,561 降到 1,436（Pro 上下文），CLI 通用估算为 1,383。默认、精简、Shell、精简+Shell 分别为 1,383 / 517 / 1,753 / 888 tokens，仍低于 1,600 / 650 / 1,900 的静态门禁。
+- **设置与文档口径修复**：设置页与重新生成的 `client/client.js` 明确说明开启后 AI 直接使用 `strong_shell`、原生 bash/pwsh 会被接管、命令继承沙箱；删除“不经过沙箱/审批”的旧文案。README 与兼容性记录同步更新。
+- **MCP 边界标注**：独立 stdio MCP 服务没有 DSH 会话沙箱。显式 `--shell on` 时 `strong_shell` 仍可用，但初始化提示词现在明确说明它按当前用户权限运行，并建议需要沙箱时改用原生插件；README 的 MCP 与安全边界同步标注，不再写成继承 DSH 沙箱。
+- **验证**：197 项自动化测试通过，覆盖路由拦截及跳过条件、沙箱包装/失败关闭、Windows 受限模式后端回退、Electron 运行器环境、只读写入拒绝、首尾截断、后台收尾、GBK 解码、内置 `printf`/`seq`/`exit` 与搜索竞速；`node scripts/check.mjs`、`node scripts/build-ui.mjs --check` 通过。真实网络 5 查询基准见上。另用 DSH 0.2.1-rc.3 无头会话与真实模型复验四次短指令：未点名工具时模型自行选择 `strong_shell`，内置 Bash 在 `workspace-write` 沙箱中返回正确输出；固定 `pwsh` 经 Windows PowerShell 5.1 在沙箱内成功；固定 `git-bash` 返回明确的 `SHELL_UNAVAILABLE` 并拒绝在沙箱外执行，模型未尝试绕过。详见发行说明。
+
 ## 0.4.2 — 2026-11-10（维护版）
 
 包版本：`0.4.2`。本版不新增常驻工具，保持默认 6 个入口、开启附加 Shell 后 7 个入口；修复四项会在真实使用中直接暴露的正确性问题。

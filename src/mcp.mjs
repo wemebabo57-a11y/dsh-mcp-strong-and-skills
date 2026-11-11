@@ -7,7 +7,8 @@ import { StringDecoder } from 'node:string_decoder';
 // A small, dependency-free stdio implementation of the negotiated MCP subset.
 // No HTTP listener, sampling, prompts, or subscriptions. The optional strong_shell
 // tool executes commands only when explicitly enabled; its cwd starts inside the
-// project, but the command itself runs with the current user permissions.
+// project, but MCP has no DSH session sandbox, so the command itself runs with the
+// current user permissions. The initialize policy says this explicitly.
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_IN_FLIGHT = 16;
@@ -38,7 +39,7 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
       }
       state = 'initializing';
       return { protocolVersion: PROTOCOL_VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSIONS[0],
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: packageInfo.name, version: packageInfo.version }, instructions: buildPolicy(engine.config, { root: engine.workspace.root }) };
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: packageInfo.name, version: packageInfo.version }, instructions: buildPolicy(engine.config, { root: engine.workspace.root, shellSandboxed: false }) };
     }
     if (state !== 'ready') throw Object.assign(new Error('Send initialize and notifications/initialized first'), { rpcCode: -32002 });
     if (params !== undefined && (!params || typeof params !== 'object' || Array.isArray(params))) throw Object.assign(new Error('Parameters must be an object'), { rpcCode: -32602 });

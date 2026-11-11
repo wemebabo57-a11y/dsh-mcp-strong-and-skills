@@ -1,7 +1,7 @@
 import { Workspace } from './workspace.mjs';
 import { resolveConfig } from './config.mjs';
 import { selectSkills } from './skills.mjs';
-import { POLICY, estimateTokens } from './policy.mjs';
+import { POLICY, buildShellRoutePolicy, estimateTokens } from './policy.mjs';
 import { buildEnhancementPolicy, buildUnlimitedPolicy } from './thinking.mjs';
 import { getModelProfile } from './models.mjs';
 import { buildDesignModePolicy, buildThinkingModePolicy, getModeState } from './modes.mjs';
@@ -15,7 +15,7 @@ import { validateArguments as validateSchema } from './validation.mjs';
 import { fitResult } from './budget.mjs';
 
 export const BASE_TOOLS = Object.freeze([
-  { name: 'strong_skill', description: '按需加载代码技能：query 匹配，id 精确加载，无参数列目录；简单任务不必调用。',
+  { name: 'strong_skill', description: '按需加载代码技能：query 匹配、id 精确加载、无参数列目录；匹配就先加载。',
     inputSchema: { type: 'object', properties: {
       query: { type: 'string', maxLength: 500, description: '任务或技能关键词' },
       id: { type: 'string', enum: ['code-delivery', 'debug', 'refactor', 'testing', 'frontend-design', 'security-review', 'performance', 'research'] },
@@ -49,17 +49,19 @@ export function toolsForConfig(options = {}) {
 
 export function buildPolicy(options = {}, context = {}) {
   const config = resolveConfig(options);
+  // Routing for the gated tools, and only for tools this configuration
+  // registers: compact sessions get no hint at all, so they stay on POLICY.
   const hints = [];
   if (config.toolSet === 'expanded' || config.unlimitedTokens) {
     hints.push('代码用 strong_code/strong_review');
-    if (config.webTool) hints.push('联网用 strong_web 先 search 再 open');
+    if (config.webTool) hints.push('联网先 strong_web search 再 open');
     if (config.browseTool !== 'off' && context.browseAvailable !== false) hints.push('真实页面用 strong_browse');
   }
   const toolHint = hints.length ? `${hints.join('；')}。线索仍需实际验证。` : '';
   return [
     POLICY,
     toolHint,
-    config.shellTool ? buildShellPolicy(config) : '',
+    config.shellTool ? `${buildShellRoutePolicy(config)}\n${buildShellPolicy(config, context)}` : '',
     buildDesignModePolicy(config),
     buildEnhancementPolicy(config, context),
     buildThinkingModePolicy(config, context),
@@ -83,7 +85,7 @@ export class StrongEngine {
     this.config = resolveConfig(options);
     this.workspace = new Workspace(root, this.config);
   }
-  async call(name, args = {}, { signal } = {}) {
+  async call(name, args = {}, { signal, sandbox = null } = {}) {
     signal?.throwIfAborted();
     const tool = toolsForConfig(this.config).find(tool => tool.name === name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
@@ -96,13 +98,16 @@ export class StrongEngine {
           ? await new Knowledge(this.workspace.root, this.config).run(args, { signal })
           : await this.workspace.run(args, { signal })
         : name === 'strong_shell'
-          ? await runShellTool(args, { root: this.workspace.root, config: this.config, signal })
+          ? await runShellTool(args, { root: this.workspace.root, config: this.config, signal, sandbox })
           : name === 'strong_web'
             ? await runWebTool(args, { root: this.workspace.root, config: this.config, signal })
             : name === 'strong_browse'
               ? await runBrowseTool(args, { root: this.workspace.root, config: this.config, signal })
               : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
     signal?.throwIfAborted();
+    // Shell streams already enforce a 64 KiB head+tail budget per stream. Cutting
+    // the JSON again would silently shrink that contract to maxOutputChars.
+    if (name === 'strong_shell') return value;
     const knowledge = name === 'strong_context' && ['knowledge', 'project'].includes(args.action);
     return boundResult(value, knowledge ? Math.min(this.config.maxOutputChars, 6000) : this.config.unlimitedTokens ? Number.POSITIVE_INFINITY : this.config.maxOutputChars);
   }

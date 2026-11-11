@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { boundResult, budgetReport, StrongEngine, BASE_TOOLS, TOOLS, toolsForConfig, buildPolicy } from '../src/engine.mjs';
-import { SHELL_TOOL } from '../src/shell-tool.mjs';
+import { SHELL_TOOL, buildShellPolicy } from '../src/shell-tool.mjs';
 import { resolveConfig } from '../src/config.mjs';
 import { snapshotConfig } from '../src/native-config.mjs';
-import { POLICY } from '../src/policy.mjs';
+import { POLICY, SHELL_ROUTE, estimateTokens } from '../src/policy.mjs';
 import { parseArgs } from '../bin/strong.mjs';
 
 test('bounded canonical results remain valid JSON and disclose truncation', () => {
@@ -65,6 +65,39 @@ test('expanded and compact budgets account for the active policy and schemas', a
   for (const [name, args] of [['strong_code', { action: 'symbols' }], ['strong_review', {}]]) {
     await assert.rejects(compactEngine.call(name, args), /Unknown tool/);
   }
+});
+
+test('strong tools are the default route and an enabled shell is routed, not offered', () => {
+  const base = buildPolicy();
+  // The routing block opens the policy so the preference is read before any other rule.
+  assert.ok(base.startsWith(POLICY));
+  assert.match(POLICY, /工具选择：本插件工具优先/);
+  assert.match(POLICY, /技能先用 strong_skill/);
+  assert.match(POLICY, /仓库上下文用 strong_context/);
+  assert.match(base, /代码用 strong_code\/strong_review/);
+  assert.match(base, /联网先 strong_web search 再 open/);
+  // Never advertise a tool the active configuration does not register.
+  assert.doesNotMatch(base, /strong_shell/);
+  assert.doesNotMatch(buildPolicy({ toolSet: 'compact' }), /strong_code|strong_review|strong_web|strong_browse|strong_shell/);
+  // An enabled shell is an imperative route, placed before the descriptive block
+  // that explains permissions, and it forbids silently falling back.
+  const shellBlock = buildShellPolicy({ shellBackend: 'git-bash' });
+  const withShell = buildPolicy({ shellTool: true, shellBackend: 'git-bash' });
+  assert.ok(withShell.includes(SHELL_ROUTE));
+  assert.ok(withShell.includes(shellBlock));
+  // The route is read before the descriptive permission block that follows it.
+  assert.ok(withShell.indexOf(SHELL_ROUTE) < withShell.indexOf(shellBlock));
+  assert.match(withShell, /所有 shell 命令.*直接用 strong_shell 执行/);
+  assert.match(withShell, /不要改用宿主原生 bash\/pwsh/);
+  assert.match(withShell, /strong_shell 报错时按提示调整/);
+});
+
+test('resident policy text stays inside the published token ceiling', () => {
+  const expanded = budgetReport();
+  assert.ok(expanded.policyChars <= 600, String(expanded.policyChars));
+  assert.ok(estimateTokens(buildPolicy()) <= 480, String(estimateTokens(buildPolicy())));
+  assert.ok(expanded.approximateResidentTokens < 1500, String(expanded.approximateResidentTokens));
+  assert.ok(budgetReport({ toolSet: 'compact' }).approximateResidentTokens < 850);
 });
 
 test('fresh config snapshots update budgets and profile limits without retaining stale defaults', () => {

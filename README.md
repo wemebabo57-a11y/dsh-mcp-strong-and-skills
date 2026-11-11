@@ -9,17 +9,17 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 [![CI](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-cb603f?style=flat-square)](LICENSE)
 [![Runtime dependencies: 0](https://img.shields.io/badge/runtime_dependencies-0-242720?style=flat-square)](package.json)
-[![Tests: 168](https://img.shields.io/badge/tests-168-6d7950?style=flat-square)](test)
+[![Tests: 197](https://img.shields.io/badge/tests-197-6d7950?style=flat-square)](test)
 
 [快速开始](#快速开始) · [插件设置](#插件设置) · [三种增强模式](#三种增强模式) · [能力一览](#能力一览) · [MCP 接入](#mcp-接入) · [上下文预算](#上下文预算)
 
 </div>
 
-![8 个按需技能、6 个默认工具入口、可选 Shell、轻量上下文](docs/assets/hero.svg)
+![8 个按需技能、6 个默认工具入口、接入沙箱的 Shell、轻量上下文](docs/assets/hero.svg)
 
-面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略；需要时可以开启完全不省 token 的无限模式。** 内置 8 个按需技能、6 个默认工具入口（含联网搜索与真实后台浏览器）、可选的附加 Shell 工具（Windows 优先 Git Bash，也可选 WSL、PowerShell 7、cmd 或插件内置 Bash）、可关闭的增强思考，以及独立的 stdio MCP 服务。
+面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略；需要时可以开启完全不省 token 的无限模式。** 内置 8 个按需技能、6 个默认工具入口（含联网搜索与真实后台浏览器）、可选的 Shell 工具（Windows 沙箱下自动使用插件内置 Bash；非受限时优先 Git Bash，也可选 WSL、PowerShell 7、cmd 或内置 Bash）、可关闭的增强思考，以及独立的 stdio MCP 服务。
 
-**0.4.2 维护版修复真实使用中的四个正确性问题：** Bing 搜索的 `ck/a` 跳转会在返回前解包为真实目标，并继续按规范化 URL 去重；`strong_shell` 超时或取消后会在约 750 ms 内强制收尾，不再因只等 `close` 而挂满超时窗口；`strong_browse click` 找不到元素时抛出 `BROWSER_TARGET_MISSING`，不再静默成功；截图输出改用 `WeakMap` 传递图像块，PTC 下不再触发 lossless JSON 序列化错误。工具面、默认开关与预算不变：默认 6 个入口约 1,473 tokens，开启 Shell 后 7 个入口约 1,798 tokens。0.4.1 的安全、生命周期与预算修复继续保留。
+**0.4.3 预览版把 Shell 接入 DSH 沙箱并改为默认执行路径：** 开启「Shell 工具」后，AI 直接使用 `strong_shell`，宿主原生 bash/pwsh 调用会被拦截并收到改用提示（Shell 关闭或工具不可见时不拦截）。命令跟随当前会话的沙箱策略：只读/工作区写入模式由 DSH 沙箱运行器约束，`danger-full-access` 才全权执行，缺少沙箱服务时失败关闭。每路输出上限 64 KiB 并保留开头与末尾，后台子进程不再拖住调用，非 UTF-8 输出按 GBK 回退解码。Windows ACL 沙箱无法启动 Git Bash 时，`auto` 自动改用内置 Bash；固定 `git-bash` 会返回明确错误而不是空输出。Electron 宿主的沙箱运行器现在会带上 `ELECTRON_RUN_AS_NODE` 与宿主 preload，不再静默退出。`strong_web` 搜索改为多引擎并发竞速，实测中位耗时从 11.1 秒降到 0.25 秒。常驻提示词再降约 22%，默认 6 个入口约 1,383 tokens，开启 Shell 后 7 个入口约 1,753 tokens。0.4.2 的 Bing 解包、超时收尾、点击校验与 PTC 截图修复继续保留。
 
 **保留 0.3.0 的功能更新：**
 - **修复 we need to 思维**：旧版只有在模型名含 `deepseek` 且增强思考开启时才注入，其他模型或关闭增强思考后勾选确实没有效果。现在只取决于该开关，所有模型、增强思考关闭时都生效，并明确要求先写下 `We need to …` 目标，再展开证据、行动与验证。
@@ -28,7 +28,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 模型继续使用宿主当前 profile 启用的编辑、终端、联网、浏览器与子代理工具。本插件在本地加载技能、检索文件，不在后台发起模型请求。
 
-> **本轮验证：** 168 项自动化测试与静态预算门禁通过；真实网络已验证 Bing 搜索返回真实目标并能打开正文，真实 Edge 已验证缺失元素报错与 1280×900 PNG 截图。PTC 截图需安装 0.4.2 后复验；开发过程中未发送模型生成请求。详见[知识库说明](docs/knowledge.md)与[兼容性记录](docs/compatibility.md)。
+> **本轮验证：** 197 项自动化测试与静态预算门禁通过；新增覆盖沙箱包装与失败关闭、Windows 沙箱下的后端回退、Electron 运行器环境、64 KiB 首尾保留、后台命令收尾、GBK 解码、原生 shell 路由拦截，以及搜索并发竞速。真实网络复测 5 个查询，中位耗时从 11.1 秒降到 0.25 秒。另在 DSH 0.2.1-rc.3 无头会话中用真实模型复验四次短指令：未被点名工具时，模型自行选择 `strong_shell`，后端为内置 Bash，沙箱模式 `workspace-write`、`enforced: true`，命令输出正确；固定 `pwsh` 时经 Windows PowerShell 5.1 在沙箱内返回正确输出；固定 `git-bash` 时返回明确的不可用错误并拒绝在沙箱外执行，模型没有尝试绕过。复验未用于生成项目代码。详见[知识库说明](docs/knowledge.md)与[兼容性记录](docs/compatibility.md)。
 
 ## 项目设定与知识库
 
@@ -38,7 +38,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 保存的是来源登记，首次工具调用才访问资料。默认只列目录，检索小量带来源、路径、行号的命中，再定向读片段；无限模式下知识结果仍最多 6000 字符。卡片占用少量常驻上下文，源码变化后请更新。[教程与 CLI/MCP 配置](docs/knowledge.md)。
 
-0.4.2 的发行说明见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.4.2)，也可按下文直接从仓库安装。
+0.4.3-preview.1 的发行说明见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.4.3-preview.1)，也可按下文直接从仓库安装。
 
 ## 快速开始
 
@@ -66,7 +66,7 @@ dsh --profile web
 需要固定版本时，可在仓库来源后追加发布标签或提交 SHA：
 
 ```sh
-dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.4.2
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.4.3-preview.1
 ```
 
 卸载时使用包名，然后重启对应 profile：
@@ -131,14 +131,14 @@ github:wemebabo57-a11y/dsh-mcp-strong-and-skills#main
 | 思考等级 | 均衡 | 深度模式增加一次有上限的反例检查，避免无限自审；无限模式自动按深度增强处理 |
 | 澄清频率 | 多问一些 | 缺少会影响实现的关键信息时，合并询问 1–3 个问题；简单任务继续执行 |
 | 模型策略 | 自动 | 识别 DeepSeek API 别名及明确支持的版本名称使用专用策略；其他模型使用完整通用增强 |
-| 工具集 | 扩展 | 默认 6 个入口；精简模式保留 `strong_skill` 与 `strong_context`；无限模式强制 6 个默认入口（附加 Shell 另计） |
+| 工具集 | 扩展 | 默认 6 个入口；精简模式保留 `strong_skill` 与 `strong_context`；无限模式强制 6 个默认入口（Shell 工具另计） |
 | 联网工具 | 开启 | 扩展模式下注册 `strong_web`：先返回 JSON 搜索结果，再按 `id` 或网址读正文；不启动浏览器 |
 | 浏览器工具 | 自动 | `auto` 只给视觉模型注册 `strong_browse` 并返回截图；`on` 强制开启；`off` 关闭。使用本机 Chrome、Edge、Brave 或 Chromium |
 | 允许访问内网 | 关闭 | 允许 `strong_web` 访问 localhost、内网、链路本地与云元数据地址；默认关闭以降低 SSRF 风险，仅在确需读取本地或内网页时开启 |
 | PTC 指导 | 自动 | 宿主提供 `run_code` 时注入 PTC 用法；`on` 强制、`off` 关闭 |
 | 浏览器路径 | 空 | 可选：指定浏览器可执行文件的绝对路径；留空自动发现 |
-| 附加 Shell 工具 | 关闭 | 开启后注册第 7 个工具 `strong_shell`；不会替换 DSH 默认 shell、原生命令或文件工具。仅在可信项目中开启 |
-| Shell 后端 | 自动 | `auto` 在 Windows 依次尝试 Git Bash → WSL → PowerShell 7 → cmd，最后落到内置 Bash；POSIX 先找 `bash`，再落到内置 Bash。也可固定为 `git-bash`、`wsl`、`bash`、`pwsh`、`cmd` 或 `builtin` |
+| Shell 工具 | 关闭 | 开启后注册第 7 个工具 `strong_shell`，并让 AI 直接用它执行所有 shell 命令；开启期间宿主原生 bash/pwsh 调用会被拦截并提示改用 `strong_shell`（Shell 关闭或工具不可见时不拦截）。不替换 DSH 默认 shell 设置本身 |
+| Shell 后端 | 自动 | `auto` 在 Windows 未受限时依次尝试 Git Bash → WSL → PowerShell 7 → cmd，最后落到内置 Bash；在 DSH 受限令牌沙箱下跳过无法启动的 Git Bash，直接用内置 Bash。POSIX 先找 `bash`，再落到内置 Bash。也可固定为 `git-bash`、`wsl`、`bash`、`pwsh`、`cmd` 或 `builtin`；固定后 AI 不再询问或改用其他后端 |
 | Shell 路径 | 空 | 可选：指定 shell 可执行文件的绝对路径；留空自动发现。必须与所选后端匹配，`builtin` 不需要路径 |
 | WSL 发行版 | 空 | 可选：指定 WSL 发行版名称；留空使用默认发行版。仅对 `wsl` 后端生效 |
 | 资源档位 | 均衡 | 控制普通模式的扫描与输出上限；无限模式覆盖为最大范围 |
@@ -165,7 +165,7 @@ github:wemebabo57-a11y/dsh-mcp-strong-and-skills#main
 
 - 本插件不再截断工具结果：`strong_context` 的读取与检索结果按完整内容返回，`strong_code` / `strong_review` 使用更高的文件与条目预算；
 - 工作区扫描最多 **5,000 个文件**、单文件 **262,144 字节**，普通读取上限提升到 **5,000 行**，单行不再按 1,200 字符截断；
-- 一次最多可读取 **8 个完整技能正文**，并强制显示全部 **6 个默认工具入口**，即使 profile 选择了精简工具集；若开启附加 Shell，`strong_shell` 另计；
+- 一次最多可读取 **8 个完整技能正文**，并强制显示全部 **6 个默认工具入口**，即使 profile 选择了精简工具集；若开启 Shell 工具，`strong_shell` 另计；
 - 提示词要求完整列出目标、约束、验收矩阵与至少两个方案，执行尽可能全面的验证，并给出完整代码、diff、证据、风险与未覆盖项；
 - 增强思考开启时自动按 `deep` 处理，额外做有界反例检查。
 
@@ -190,9 +190,9 @@ github:wemebabo57-a11y/dsh-mcp-strong-and-skills#main
 
 前端技能优先尊重用户要求与现有品牌。新界面默认避免深蓝底、蓝紫渐变、无意义光晕和重复的大标题卡片，鼓励根据内容选择视觉方向。这些是指令与启发式建议，不能保证模型每次都遵守。
 
-### 6 个默认工具入口 + 可选 Shell
+### 6 个默认工具入口 + 可选 Shell 工具
 
-默认工具面为 6 个。只有显式开启「附加 Shell 工具」时，`strong_shell` 才注册为第 7 个入口；精简工具集下则是 2 个默认入口，若同时开启 Shell 则为 3 个。
+默认工具面为 6 个。只有显式开启「Shell 工具」时，`strong_shell` 才注册为第 7 个入口；精简工具集下则是 2 个默认入口，若同时开启 Shell 则为 3 个。开启后它是 AI 的默认 shell 路径。
 
 | 工具 | 调用方式 | 返回内容 |
 | --- | --- | --- |
@@ -217,9 +217,9 @@ github:wemebabo57-a11y/dsh-mcp-strong-and-skills#main
 
 `strong_web` 只访问 http(s) 地址，单页最多 2 MB、15 秒超时，只提取 HTML/XML/文本，不执行页面脚本，也不处理登录与下载；需要 JavaScript 渲染后的页面时改用 `strong_browse`。`strong_browse` 用临时用户目录启动本机浏览器，不继承日常浏览器的登录状态与扩展，空闲 3 分钟自动关闭。
 
-`strong_shell` 的可用后端：`auto`、`git-bash`、`wsl`、`bash`、`pwsh`、`cmd`、`builtin`。命令直接启动所选可执行文件，不经过 `shell:true` 二次转义；工作目录从项目内开始，但命令以当前用户权限运行，可访问项目外路径，也不经过 DSH 原生沙箱或审批。stdout/stderr 各最多 64 KiB，默认超时 60 秒（可设 1–120 秒），取消时终止子进程树。
+`strong_shell` 的可用后端：`auto`、`git-bash`、`wsl`、`bash`、`pwsh`、`cmd`、`builtin`。命令直接启动所选可执行文件，不经过 `shell:true` 二次转义；工作目录从项目内开始。**原生插件中**它继承当前会话的 DSH 沙箱策略：只读与工作区写入模式通过宿主沙箱运行器限制文件访问，只有会话本身是 `danger-full-access` 才以当前用户权限全权执行；需要限制但主机没有可用沙箱服务时，调用失败关闭而不是降级。**独立 MCP 服务没有 DSH 会话沙箱**，显式开启 Shell 后以当前用户权限运行，详见 [MCP 接入](#mcp-接入)。stdout/stderr 各最多 64 KiB，超出时保留开头与末尾；默认超时 60 秒（可设 1–120 秒），取消时终止子进程树。开启该工具后，宿主原生 bash/pwsh 调用会被拒绝并收到改用提示。
 
-`builtin` 是插件内的 JavaScript POSIX 子集，不要求系统已安装 Bash：支持引号、变量、`$()`、管道、`&&`、`||`、重定向与通配符，内置常用文件与文本命令，其他程序按 PATH 直接启动。它拒绝内置命令的目录穿越，但不是完整 Bash，也不是沙箱。
+`builtin` 是插件内的 JavaScript POSIX 子集，不要求系统已安装 Bash：支持引号、变量、`$()`、管道、`&&`、`||`、重定向与通配符，内置常用文件与文本命令，其他程序按 PATH 直接启动。它拒绝内置命令的目录穿越，并按同一沙箱策略包装外部程序；但不是完整 Bash，也不是额外的操作系统隔离层。
 
 原生工具的参数示例：
 
@@ -271,6 +271,8 @@ dsh --profile web --patch /absolute/path/to/strong.mcp.patch.yml
 
 服务只读取启动时指定的项目根目录；切换项目需重启服务。stdout 专用于 JSON-RPC，诊断写入 stderr。支持 tools、resources 与 `strong://skills/<id>` 技能资源；支持协商 `2025-11-25`、`2025-06-18`、`2025-03-26`、`2024-11-05` 协议版本。
 
+**Shell 边界：** 独立 MCP 服务没有 DSH 会话沙箱。只有显式传入 `--shell on` 才会注册 `strong_shell`，此时命令以当前用户权限运行；初始化提示词会明确标注这一点，并建议需要沙箱时改用原生插件。默认关闭。
+
 独立 MCP 服务不继承 DSH 的设置页状态。可用启动参数选择增强方式：
 
 ```sh
@@ -283,11 +285,11 @@ node bin/strong.mjs serve --root /absolute/path/to/project --shell on --shell-ba
 node bin/strong.mjs serve --root /absolute/path/to/project --web off --browse off
 ```
 
-生成原生或 MCP 配置时均可使用 `--claude-mode on`、`--we-need-to on` 与 `--unlimited on`；附加 Shell 使用 `--shell on|off`、`--shell-backend`、`--shell-path` 与 `--wsl-distro`；联网与浏览器使用 `--web on|off`、`--web-private on|off`、`--browse auto|on|off`、`--ptc auto|on|off` 与 `--browser-path`。we need to 现在不依赖当前模型名称；`--model` 只选择 Pro/Flash 工作策略。
+生成原生或 MCP 配置时均可使用 `--claude-mode on`、`--we-need-to on` 与 `--unlimited on`；Shell 工具使用 `--shell on|off`、`--shell-backend`、`--shell-path` 与 `--wsl-distro`；联网与浏览器使用 `--web on|off`、`--web-private on|off`、`--browse auto|on|off`、`--ptc auto|on|off` 与 `--browser-path`。we need to 现在不依赖当前模型名称；`--model` 只选择 Pro/Flash 工作策略。
 
 ## 上下文预算
 
-默认扩展工具与均衡增强约 **1,473 tokens**（6 个入口）；切换为精简工具并关闭增强思考可回到约 **562 tokens**（2 个入口）。开启附加 Shell 后约 **1,798 tokens**（7 个入口），精简工具加 Shell 约 **886 tokens**。所有普通模式都**不预载技能正文**，不会后台调用模型或运行隐藏的多轮评审；联网与浏览器工具只在被调用时访问网络。数字为字符启发式估算，不是 DeepSeek tokenizer 或账单测量，也未计入宿主上下文与 MCP 包装，可自行复算：
+默认扩展工具与均衡增强约 **1,383 tokens**（6 个入口）；切换为精简工具并关闭增强思考可回到约 **517 tokens**（2 个入口）。开启 Shell 后约 **1,753 tokens**（7 个入口），精简工具加 Shell 约 **888 tokens**。所有普通模式都**不预载技能正文**，不会后台调用模型或运行隐藏的多轮评审；联网与浏览器工具只在被调用时访问网络。数字为字符启发式估算，不是 DeepSeek tokenizer 或账单测量，也未计入宿主上下文与 MCP 包装，可自行复算：
 
 ```sh
 node bin/strong.mjs budget
@@ -296,7 +298,7 @@ node bin/strong.mjs budget --claude-mode on --we-need-to on
 node bin/strong.mjs budget --unlimited on
 ```
 
-在默认配置上，Claude 模式追加约 **165 tokens**，we need to 思维追加约 **120 tokens**，两者同时生效合计约 **285 tokens**（总计约 1,845）。这是相对同一模型、同一配置的增量；Flash 专用策略下约 **1,644 tokens**，Pro 专用策略下约 **1,648 tokens**。无限模式默认约 **1,788 tokens**；无限 + 精简工具 + 关闭增强思考时约 **1,434 tokens**，但工具结果与读取范围不再截断。CLI `budget` 会显示 `maxResultChars: "unlimited"`、`maxFiles: 5000` 与 `maxSkillLoads: 8` 作为生效证据。
+在默认配置上，Claude 模式追加约 **125 tokens**，we need to 思维追加约 **84 tokens**，两者同时生效合计约 **208 tokens**（总计约 1,591）。这是相对同一模型、同一配置的增量；Flash 专用策略下约 **1,437 tokens**，Pro 专用策略下约 **1,436 tokens**。无限模式默认约 **1,571 tokens**；无限 + 精简工具 + 关闭增强思考时约 **1,307 tokens**，但工具结果与读取范围不再截断。CLI `budget` 会显示 `maxResultChars: "unlimited"`、`maxFiles: 5000` 与 `maxSkillLoads: 8` 作为生效证据。
 
 | Profile（普通模式） | 单次结果字符上限 | 最多扫描文件 | 每次最多加载技能 |
 | --- | ---: | ---: | ---: |
@@ -317,7 +319,7 @@ flowchart LR
     Gateway --> Context[strong_context · 限量读取仓库]
     Gateway --> Code[strong_code / strong_review]
     Gateway --> Web[strong_web / strong_browse]
-    Gateway -.可选.-> Shell[strong_shell · Git Bash / WSL / pwsh / cmd / 内置 Bash]
+    Gateway -.可选.-> Shell[strong_shell · 沙箱内内置 Bash / 其余 Git Bash、WSL、pwsh、cmd]
     Skills --> Model[模型结合宿主工具完成任务]
     Context --> Model
     Code --> Model
@@ -325,8 +327,8 @@ flowchart LR
     Shell -.-> Model
 ```
 
-- 默认四个仓库工具只读，不执行项目脚本或任意命令。`checks` 返回的建议由模型结合任务与宿主权限决定是否执行。`strong_web` 只抓取网页文本，`strong_browse` 会启动本机无头浏览器并访问目标网址；两者都只在被调用时联网。只有用户显式开启「附加 Shell 工具」后，才会注册 `strong_shell`。
-- `strong_shell` 与内置 Bash 都以当前用户权限运行；工作目录从项目内开始，但命令可访问项目外文件，也不经过 DSH 原生沙箱或审批。内置 Bash 会拒绝内置命令的目录穿越，但它不是完整 Bash，也不是操作系统级隔离。仅应在可信项目中开启。
+- 默认四个仓库工具只读，不执行项目脚本或任意命令。`checks` 返回的建议由模型结合任务与宿主权限决定是否执行。`strong_web` 只抓取网页文本，`strong_browse` 会启动本机无头浏览器并访问目标网址；两者都只在被调用时联网。只有用户显式开启「Shell 工具」后，才会注册 `strong_shell`，并作为 AI 的默认 shell 执行路径。
+- **原生插件中**，`strong_shell` 与内置 Bash 都跟随当前会话的 DSH 沙箱策略：只读/工作区写入模式通过宿主沙箱运行器限制越权文件访问，`danger-full-access` 才全权执行；缺少沙箱服务时失败关闭。工作目录从项目内开始，实际可访问范围由沙箱模式决定。独立 MCP 服务没有 DSH 会话沙箱，显式 `--shell on` 时以当前用户权限运行。内置 Bash 会拒绝内置命令的目录穿越，并按同一策略包装外部程序；它不是完整 Bash，也不是额外的隔离层。
 - 默认排除生成目录、二进制、大文件和常见敏感路径，拒绝目录穿越与符号链接。Git 可用时遵循其 ignore 规则，否则明确说明仅使用内置排除规则。普通源码中的敏感信息仍可能被读取；无限模式只放宽读取范围，不取消安全排除。
 - `diff` 不含暂存区或未跟踪文件；不支持的 Git 环境会返回原因。`style` 是启发式建议，不是 CSS 解析器或品牌判定器。
 - 插件不会安装外部 MCP 服务、改变模型权限或替代 DSH 的安全边界。
@@ -344,7 +346,7 @@ npm test
 npm run budget
 ```
 
-测试覆盖中英文技能路由、原生宿主契约模拟、真实 stdio 子进程往返、路径边界、取消、输出上限、无限模式覆盖、可选 Shell 后端/超时/截断/环境过滤、内置 Bash、联网搜索解析与缓存、浏览器开关/PTC 策略与设置/CLI/MCP 往返。本地检查不等于真实 DSH 集成测试或模型能力评测。DSH 契约参考版本、上游链接与待验证项目见[兼容性记录](docs/compatibility.md)。
+测试覆盖中英文技能路由、原生宿主契约模拟、真实 stdio 子进程往返、路径边界、取消、输出上限、无限模式覆盖、Shell 沙箱包装与失败关闭、首尾保留截断、后台命令收尾、GBK 解码、原生 shell 路由拦截、Shell 后端/超时/环境过滤、内置 Bash、联网搜索并发与缓存、浏览器开关/PTC 策略与设置/CLI/MCP 往返。本地检查不等于真实 DSH 集成测试或模型能力评测。DSH 契约参考版本、上游链接与待验证项目见[兼容性记录](docs/compatibility.md)。
 
 修改 `client/*.mjs` 后运行 `npm run build:ui` 更新已提交的浏览器分发文件；静态检查会拒绝过期 bundle。无需额外构建依赖。运行 `npm pack` 可生成本地分发 tarball，打包前会自动执行静态检查和测试；安装时无需构建。
 

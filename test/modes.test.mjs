@@ -76,6 +76,9 @@ test('Claude guidance covers generated frontends and observable work without rep
   const policy = buildPolicy({ ...enabled, brandIntent: 'Use our orange brand', allowBrandColors: true }, { modelId: 'deepseek-flash' });
   assert.match(policy, /不逐字复述内部推理/);
   assert.doesNotMatch(policy, /禁止.*let me|我是Claude|你是Claude/);
+  // Both mode blocks stay small enough to remain resident on every turn.
+  assert.ok(estimateTokens(design) <= 80);
+  assert.ok(estimateTokens(thinking) <= 60);
 });
 
 test('mode composition is stateless and diagnostics distinguish requested from applied guidance', () => {
@@ -104,7 +107,7 @@ test('both modes add one bounded block each without increasing the default token
         const config = { toolSet, enhancedThinking };
         const baseline = buildPolicy(config, { modelId });
         const active = buildPolicy({ ...config, ...enabled }, { modelId });
-        assert.ok(estimateTokens(active) - estimateTokens(baseline) <= 400);
+        assert.ok(estimateTokens(active) - estimateTokens(baseline) <= 230);
         const design = buildDesignModePolicy(enabled);
         assert.equal(active.split(design).length, 2, 'Design block appears exactly once');
         const thought = buildThinkingModePolicy({ ...config, ...enabled }, { modelId });

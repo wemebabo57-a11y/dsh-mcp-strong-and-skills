@@ -157,7 +157,7 @@ test('CLI supports version and --flag=value forms', () => {
   for (const args of [['--version'], ['-v'], ['version']]) {
     const result = run(args);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /^dsh-strong \d+\.\d+\.\d+\n$/);
+    assert.match(result.stdout, /^dsh-strong \d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\n$/);
   }
   const equals = run(['budget', '--profile=lean']);
   assert.equal(equals.status, 0, equals.stderr);

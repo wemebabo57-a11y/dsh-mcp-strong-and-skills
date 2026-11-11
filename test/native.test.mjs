@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { apply, inject, name, Config } from '../src/index.mjs';
 import { StrongEngine, TOOLS, ALL_TOOLS, BASE_TOOLS, buildPolicy } from '../src/engine.mjs';
-import { resolveShell } from '../src/shell-tool.mjs';
-import { POLICY } from '../src/policy.mjs';
+import { resolveShell, buildShellPolicy } from '../src/shell-tool.mjs';
+import { POLICY, SHELL_ROUTE } from '../src/policy.mjs';
 import { snapshotConfig } from '../src/native-config.mjs';
 
 function host(ensure = async () => { throw new Error('Unexpected directory lookup'); }, defaultDirectory = process.cwd()) {
@@ -175,6 +175,23 @@ test('live shell setting adds and removes strong_shell without disturbing the to
   }
   state.shellTool = false;
   await assert.rejects(registrations.get('strong_shell').execute({ command: 'printf no' }, execution), /Unknown tool/);
+});
+
+test('live shell switch turns the policy into an imperative shell route', () => {
+  const state = { shellTool: false };
+  const { ctx, sections } = host();
+  apply(ctx, { shellTool: { get: () => state.shellTool } });
+  const render = sections[0].text;
+  assert.doesNotMatch(render(), /strong_shell/);
+  state.shellTool = true;
+  const routed = render();
+  assert.match(routed, /所有 shell 命令.*直接用 strong_shell 执行/);
+  assert.match(routed, /不要问用户用哪个/);
+  const shellBlock = buildShellPolicy(snapshotConfig({ shellTool: true }));
+  assert.ok(routed.includes(SHELL_ROUTE) && routed.includes(shellBlock));
+  assert.ok(routed.indexOf(SHELL_ROUTE) < routed.indexOf(shellBlock));
+  state.shellTool = false;
+  assert.doesNotMatch(render(), /strong_shell/);
 });
 
 test('unlimited native setting overrides compact discovery and stays live', async t => {

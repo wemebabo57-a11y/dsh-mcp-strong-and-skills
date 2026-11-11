@@ -10,6 +10,13 @@ const CACHE_ROOTS = 32;
 const MAX_REDIRECTS = 5;
 const TRACKING = /^(utm_|fbclid$|gclid$|spm$|ref$|source$)/i;
 
+// Network budgets. `open` keeps the historical 15s per request chain. Search engines
+// run concurrently, so each engine gets a shorter cap while the whole search keeps a
+// hard budget that a stalled engine cannot exceed.
+const REQUEST_TIMEOUT_MS = 15000;
+export const SEARCH_ENGINE_TIMEOUT_MS = 4000;
+export const SEARCH_BUDGET_MS = 8000;
+
 export const WEB_SEARCH_LIMIT = 10;
 
 export const WEB_TOOL = Object.freeze({
@@ -169,14 +176,15 @@ async function assertPublicUrl(url, allowPrivate) {
   }
 }
 
-async function request(url, { method = 'GET', body = null, signal, allowPrivate = false } = {}) {
-  const timeout = AbortSignal.timeout(15000);
+async function request(url, { method = 'GET', body = null, signal, allowPrivate = false, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+  const timeout = AbortSignal.timeout(timeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let current = new URL(url);
   let currentMethod = method;
   let currentBody = body;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
     await assertPublicUrl(current, allowPrivate);
+    combined.throwIfAborted();
     const response = await fetch(current, {
       method: currentMethod,
       signal: combined,
@@ -291,6 +299,74 @@ export function parseBing(html) {
   return results;
 }
 
+// Interchangeable HTML SERPs: run them at once, keep the first one that parses a
+// result and abort the rest. Trying them one after another meant a dead or throttled
+// DuckDuckGo spent its whole connect timeout (~10.5s here) before Bing was even asked.
+const SEARCH_ENGINES = Object.freeze([
+  Object.freeze({
+    name: 'duckduckgo',
+    url: () => 'https://html.duckduckgo.com/html/',
+    init: query => ({ method: 'POST', body: new URLSearchParams({ q: query }).toString() }),
+    parse: parseDuckDuckGo,
+  }),
+  Object.freeze({
+    name: 'bing',
+    url: query => 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&setlang=zh-Hans',
+    init: () => ({}),
+    parse: parseBing,
+  }),
+]);
+
+async function runSearchEngine(engine, query, { signal, allowPrivate, timeoutMs }) {
+  const response = await request(engine.url(query), { ...engine.init(query), signal, allowPrivate, timeoutMs });
+  return engine.parse(await readText(response));
+}
+
+// Start every engine at once and settle with the first engine that parsed at least one
+// result, aborting the losers. Each attempt carries a rejection handler and the race
+// always settles, so late failures never surface as unhandled rejections.
+// `engineTimeoutMs` bounds one engine request; `budgetMs` is the hard backstop for
+// work AbortSignal cannot interrupt (a wedged DNS lookup).
+export async function raceEngines(engines, query, { signal, allowPrivate = false, engineTimeoutMs = SEARCH_ENGINE_TIMEOUT_MS, budgetMs = SEARCH_BUDGET_MS } = {}) {
+  const controllers = engines.map(() => new AbortController());
+  const errors = new Array(engines.length).fill('');
+  let winner = null;
+  let remaining = engines.length;
+  let timedOut = false;
+  let settleRace;
+  const raced = new Promise(resolve => { settleRace = resolve; });
+  const cancelAll = () => { for (const controller of controllers) controller.abort(); };
+  const onCallerAbort = () => { cancelAll(); settleRace(); };
+  const timer = setTimeout(() => { timedOut = true; cancelAll(); settleRace(); }, budgetMs);
+  timer.unref?.();
+  try {
+    if (signal?.aborted) onCallerAbort();
+    else signal?.addEventListener('abort', onCallerAbort, { once: true });
+    engines.forEach((engine, index) => {
+      runSearchEngine(engine, query, { signal: controllers[index].signal, allowPrivate, timeoutMs: engineTimeoutMs }).then(results => {
+        if (winner || results.length === 0) return;
+        winner = results;
+        controllers.forEach((controller, other) => { if (other !== index) controller.abort(); });
+        settleRace();
+      }, error => {
+        errors[index] = engine.name + ': ' + (error instanceof Error ? error.message : String(error));
+      }).finally(() => {
+        remaining -= 1;
+        if (remaining === 0) settleRace();
+      });
+    });
+    if (remaining === 0) settleRace();
+    await raced;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onCallerAbort);
+  }
+  // Cancellation is not a search failure: preserve the caller's AbortError so the
+  // host can report an interrupted call instead of a network error.
+  signal?.throwIfAborted();
+  return { results: winner ?? [], errors: errors.filter(Boolean), timedOut };
+}
+
 function domainOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
 }
@@ -311,23 +387,12 @@ async function search(query, limit, signal, { root = '', allowPrivate = false } 
   if (!trimmed) throw new WorkspaceError('INVALID_ARGUMENTS', 'search 需要 query。');
   const cached = recallSearch(root, trimmed);
   if (cached) return cached.slice(0, limit);
-  const errors = [];
-  let raw = [];
-  try {
-    const response = await request('https://html.duckduckgo.com/html/', { method: 'POST', body: new URLSearchParams({ q: trimmed }).toString(), signal, allowPrivate });
-    raw = parseDuckDuckGo(await readText(response));
-  } catch (error) {
-    errors.push('duckduckgo: ' + (error instanceof Error ? error.message : String(error)));
-  }
+  const { results: raw, errors, timedOut } = await raceEngines(SEARCH_ENGINES, trimmed, { signal, allowPrivate });
   if (!raw.length) {
-    try {
-      const response = await request('https://www.bing.com/search?q=' + encodeURIComponent(trimmed) + '&setlang=zh-Hans', { signal, allowPrivate });
-      raw = parseBing(await readText(response));
-    } catch (error) {
-      errors.push('bing: ' + (error instanceof Error ? error.message : String(error)));
-    }
+    throw new WorkspaceError('WEB_SEARCH_FAILED', '搜索没有拿到结果。'
+      + (errors.length ? ' ' + errors.join('; ') : '')
+      + (timedOut ? ' 搜索超过 ' + SEARCH_BUDGET_MS + ' 毫秒预算。' : ''));
   }
-  if (!raw.length) throw new WorkspaceError('WEB_SEARCH_FAILED', '搜索没有拿到结果。' + (errors.length ? ' ' + errors.join('; ') : ''));
   const results = dedupe(raw).slice(0, WEB_SEARCH_LIMIT).map((item, index) => ({
     id: 'r' + (index + 1),
     title: item.title.slice(0, 200),

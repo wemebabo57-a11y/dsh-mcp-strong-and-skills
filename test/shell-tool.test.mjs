@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { SHELL_TOOL, buildShellPolicy, clearShellCache, resolveShell, runShellTool } from '../src/shell-tool.mjs';
+import { buildShellRoutePolicy } from '../src/policy.mjs';
+import { StrongEngine } from '../src/engine.mjs';
 
 async function workspace(t) {
   const parent = await fs.realpath(os.tmpdir());
@@ -30,7 +32,14 @@ test('optional shell metadata and policy are explicit about backend and native-t
   assert.equal(SHELL_TOOL.inputSchema.properties.cwd.maxLength, 1000);
   const policy = buildShellPolicy({ shellBackend: 'git-bash' });
   assert.match(policy, /Git Bash/);
-  assert.match(policy, /不会替换或改变 DSH 默认 shell/);
+  assert.match(policy, /直接用 strong_shell/);
+  assert.match(policy, /不要让用户选择或改用其他后端/);
+  assert.match(policy, /沙箱/);
+  assert.match(policy, /64 KiB/);
+  const route = buildShellRoutePolicy({ shellTool: true });
+  assert.match(route, /所有 shell 命令.*直接用 strong_shell 执行/);
+  assert.match(route, /不要改用宿主原生 bash\/pwsh/);
+  assert.equal(buildShellRoutePolicy({ shellTool: false }), '');
   const shell = await resolveShell({ backend: 'auto' });
   assert.ok(shell.executable);
   assert.ok(shell.args('printf ok').length > 0);
@@ -82,8 +91,30 @@ test('filters secret environment variables and caps large output', async t => {
   assert.equal(capped.stdoutTruncated, true);
   assert.equal(capped.truncated, true);
   assert.ok(capped.stdout.length >= 64 * 1024);
-  assert.match(capped.stdout, /\[truncated\]/);
+  assert.match(capped.stdout, /truncated: 已省略/);
 });
+
+test('background children do not hold the call open until the timeout', async t => {
+  const root = await workspace(t);
+  if (!(await bashShell(t))) return;
+  const started = Date.now();
+  const result = await runShellTool({ command: 'sleep 4 & printf started', timeoutMs: 5000 }, { root });
+  assert.equal(result.timedOut, false);
+  assert.equal(result.stdout, 'started');
+  assert.ok(Date.now() - started < 3000);
+});
+
+test('large output keeps the end, where failures usually are', async t => {
+  const root = await workspace(t);
+  if (!(await bashShell(t))) return;
+  const result = await runShellTool({ command: "seq 1 20000; printf 'FINAL_MARKER\\n' >&2", timeoutMs: 5000 }, { root });
+  assert.equal(result.stdoutTruncated, true);
+  assert.ok(result.stdout.length >= 64 * 1024);
+  assert.match(result.stdout, /FINAL_MARKER|truncated/);
+  assert.match(result.stderr, /FINAL_MARKER/);
+  assert.match(result.hint, /截断/);
+});
+
 
 test('times out and aborts real child processes without leaving the run pending', async t => {
   const root = await workspace(t);
@@ -119,4 +150,14 @@ test('timeout settles even when a background child keeps stdout open', async t =
   const result = await runShellTool({ command: 'sleep 10 & wait', timeoutMs: 1000 }, { root });
   assert.equal(result.timedOut, true);
   assert.ok(Date.now() - started < 3000, 'elapsed ' + (Date.now() - started) + 'ms');
+});
+
+test('engine does not shrink strong_shell output to maxOutputChars', async t => {
+  const root = await workspace(t);
+  const shell = await bashShell(t);
+  if (!shell) return;
+  const engine = new StrongEngine(root, { shellTool: true, shellBackend: shell.backend, shellPath: shell.executable, maxOutputChars: 2000 });
+  const result = await engine.call('strong_shell', { command: "head -c 70000 /dev/zero | tr '\\0' x", timeoutMs: 5000 });
+  assert.ok(result.stdout.length > 60000, 'stdout length ' + result.stdout.length);
+  assert.equal(result.stdoutTruncated, true);
 });

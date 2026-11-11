@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WEB_TOOL, WEB_SEARCH_LIMIT, clearWebCache, decodeEntities, extractPage, parseBing, parseDuckDuckGo, runWebTool, unwrapBingUrl } from '../src/web-tools.mjs';
+import { SEARCH_BUDGET_MS, SEARCH_ENGINE_TIMEOUT_MS, WEB_TOOL, WEB_SEARCH_LIMIT, clearWebCache, decodeEntities, extractPage, parseBing, parseDuckDuckGo, raceEngines, runWebTool, unwrapBingUrl } from '../src/web-tools.mjs';
 
 function htmlResponse(html, { url = '', type = 'text/html; charset=utf-8' } = {}) {
   const response = new Response(html, { status: 200, headers: { 'content-type': type } });
@@ -57,7 +57,8 @@ test('strong_web search returns JSON ids and open follows the alias', async () =
     assert.equal(first.title, 'Alpha Guide');
     assert.equal(first.snippet, 'Alpha snippet & more');
     assert.match(searched.hint, /action=open/);
-    assert.equal(calls[0].method, 'POST');
+    // Both engines start together, so look the POST up by engine instead of by order.
+    assert.equal(calls.find(call => call.url.includes('duckduckgo')).method, 'POST');
 
     const opened = await runWebTool({ action: 'open', target: 'r1', maxChars: 500 });
     assert.equal(opened.action, 'open');
@@ -69,14 +70,18 @@ test('strong_web search returns JSON ids and open follows the alias', async () =
     assert.ok(opened.links.some(link => link.url === 'https://example.com/next'));
     assert.match(opened.hint, /maxChars/);
 
+    const callsBeforeCache = calls.length;
     const cached = await runWebTool({ action: 'search', query: 'alpha', limit: 1 });
     assert.equal(cached.results.length, 1);
-    assert.equal(calls.length, 2);
+    // A cache hit does no network work, and the winning engine was asked exactly once
+    // (the losing engine is cancelled as soon as the winner answers).
+    assert.equal(calls.length, callsBeforeCache);
+    assert.equal(calls.filter(call => call.url.includes('duckduckgo')).length, 1);
     assert.equal(WEB_SEARCH_LIMIT, 10);
   });
 });
 
-test('strong_web falls back to Bing and clamps maxChars', async () => {
+test('strong_web takes Bing results when DuckDuckGo fails and clamps maxChars', async () => {
   await withFetch(async (url) => {
     if (String(url).includes('duckduckgo')) return new Response('blocked', { status: 500 });
     if (String(url).includes('bing.com/search')) {
@@ -200,5 +205,167 @@ test('Bing ck/a redirects are unwrapped and deduped after canonicalization', asy
     assert.equal(searched.results.length, 1);
     assert.equal(searched.results[0].url, 'https://example.com/story?id=7');
     assert.equal(searched.results[0].domain, 'example.com');
+  });
+});
+
+const BING = '<html><body><li class="b_algo"><h2><a href="https://bing.example/one">Bing One</a></h2><p>Bing snippet</p></li></body></html>';
+
+function fakeEngine(name, { parse } = {}) {
+  return {
+    name,
+    url: () => 'https://engine.test/' + name,
+    init: () => ({}),
+    parse: parse ?? (text => text ? [{ title: text, url: 'https://example.com/' + text, snippet: '' }] : []),
+  };
+}
+
+function rejectOnAbort(signal) {
+  return new Promise((resolve, reject) => {
+    const fail = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    if (signal?.aborted) fail();
+    else signal?.addEventListener('abort', fail, { once: true });
+  });
+}
+
+test('strong_web search races both engines and cancels the slow one', async () => {
+  const started = [];
+  let duckAborted = false;
+  await withFetch(async (url, options = {}) => {
+    const engine = String(url).includes('duckduckgo') ? 'duckduckgo' : 'bing';
+    started.push(engine);
+    if (engine === 'duckduckgo') {
+      return new Promise((resolve, reject) => {
+        const fail = () => { duckAborted = true; reject(new Error('aborted')); };
+        if (options.signal?.aborted) fail();
+        else options.signal?.addEventListener('abort', fail, { once: true });
+      });
+    }
+    return htmlResponse(BING);
+  }, async () => {
+    const startedAt = Date.now();
+    const searched = await runWebTool({ action: 'search', query: 'raced' }, { config: { webAllowPrivate: true } });
+    // Both engines were asked before either answered.
+    assert.deepEqual(started.slice().sort(), ['bing', 'duckduckgo']);
+    assert.equal(searched.results.length, 1);
+    assert.equal(searched.results[0].id, 'r1');
+    assert.equal(searched.results[0].title, 'Bing One');
+    assert.equal(duckAborted, true);
+    assert.ok(Date.now() - startedAt < 1000, 'a dead engine must not delay the answer');
+    assert.ok(SEARCH_ENGINE_TIMEOUT_MS < SEARCH_BUDGET_MS);
+    assert.ok(SEARCH_BUDGET_MS <= 8000);
+  });
+});
+
+test('strong_web keeps DuckDuckGo results when it answers first', async () => {
+  let bingAborted = false;
+  await withFetch(async (url, options = {}) => {
+    if (String(url).includes('duckduckgo')) return htmlResponse(DDG);
+    return new Promise((resolve, reject) => {
+      const fail = () => { bingAborted = true; reject(new Error('aborted')); };
+      if (options.signal?.aborted) fail();
+      else options.signal?.addEventListener('abort', fail, { once: true });
+    });
+  }, async () => {
+    const searched = await runWebTool({ action: 'search', query: 'duck-first' }, { config: { webAllowPrivate: true } });
+    assert.equal(searched.results.length, 2);
+    assert.equal(searched.results[0].title, 'Alpha Guide');
+    assert.equal(bingAborted, true);
+  });
+});
+
+test('strong_web reports every engine failure when nothing answers', async () => {
+  await withFetch(async () => new Response('blocked', { status: 503 }), async () => {
+    await assert.rejects(() => runWebTool({ action: 'search', query: 'down' }, { config: { webAllowPrivate: true } }), error => {
+      assert.equal(error.code, 'WEB_SEARCH_FAILED');
+      assert.match(error.message, /duckduckgo: 请求失败：503/);
+      assert.match(error.message, /bing: 请求失败：503/);
+      assert.doesNotMatch(error.message, /毫秒预算/);
+      return true;
+    });
+  });
+});
+
+test('strong_web search failure message stays stable when engines return empty pages', async () => {
+  await withFetch(async () => htmlResponse('<html><body>no parsed results</body></html>'), async () => {
+    await assert.rejects(() => runWebTool({ action: 'search', query: 'empty' }, { config: { webAllowPrivate: true } }), error => {
+      assert.equal(error.code, 'WEB_SEARCH_FAILED');
+      assert.equal(error.message, '搜索没有拿到结果。');
+      return true;
+    });
+  });
+});
+
+test('raceEngines keeps the first non-empty parse and aborts the rest', async () => {
+  const aborted = [];
+  await withFetch(async (url, options = {}) => {
+    const name = String(url).split('/').pop();
+    if (name === 'slow') return rejectOnAbort(options.signal).catch(error => { aborted.push(name); throw error; });
+    return htmlResponse('fast');
+  }, async () => {
+    const outcome = await raceEngines([fakeEngine('slow'), fakeEngine('fast')], 'q', { allowPrivate: true, engineTimeoutMs: 500, budgetMs: 2000 });
+    assert.deepEqual(outcome.results.map(item => item.title), ['fast']);
+    assert.deepEqual(outcome.errors, []);
+    assert.deepEqual(aborted, ['slow']);
+    assert.equal(outcome.timedOut, false);
+  });
+});
+
+test('raceEngines bounds an engine that never answers', async () => {
+  const startedAt = Date.now();
+  await withFetch(async (url, options = {}) => rejectOnAbort(options.signal), async () => {
+    const outcome = await raceEngines([fakeEngine('wedged')], 'q', { allowPrivate: true, engineTimeoutMs: 60, budgetMs: 5000 });
+    assert.deepEqual(outcome.results, []);
+    assert.equal(outcome.timedOut, false);
+    assert.match(outcome.errors[0], /^wedged: /);
+    assert.ok(Date.now() - startedAt < 1000, 'per-engine timeout should settle the race');
+  });
+});
+
+test('raceEngines returns at the budget even when an engine ignores aborts', async () => {
+  const startedAt = Date.now();
+  await withFetch(async () => new Promise(() => {}), async () => {
+    // The stub never settles and never observes its abort signal: only the budget can end the race.
+    const outcome = await raceEngines([fakeEngine('stuck')], 'q', { allowPrivate: true, engineTimeoutMs: 5000, budgetMs: 80 });
+    const elapsed = Date.now() - startedAt;
+    assert.deepEqual(outcome.results, []);
+    assert.equal(outcome.timedOut, true);
+    assert.ok(elapsed >= 60 && elapsed < 1000, 'elapsed ' + elapsed);
+  });
+});
+
+test('raceEngines never leaks a late loser rejection', async () => {
+  const leaked = [];
+  const onUnhandled = reason => { leaked.push(reason); };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    await withFetch(async (url) => {
+      if (String(url).includes('late')) return new Promise((resolve, reject) => setTimeout(() => reject(new Error('late boom')), 30));
+      return htmlResponse('winner');
+    }, async () => {
+      const outcome = await raceEngines([fakeEngine('late'), fakeEngine('winner')], 'q', { allowPrivate: true, engineTimeoutMs: 500, budgetMs: 2000 });
+      assert.deepEqual(outcome.results.map(item => item.title), ['winner']);
+      await new Promise(resolve => setTimeout(resolve, 80));
+    });
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+  assert.deepEqual(leaked, []);
+});
+
+test('caller aborts cancel both engines instead of waiting for the budget', async () => {
+  const aborted = [];
+  await withFetch(async (url, options = {}) => {
+    const name = String(url).includes('duckduckgo') ? 'duckduckgo' : 'bing';
+    return rejectOnAbort(options.signal).catch(error => { aborted.push(name); throw error; });
+  }, async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 50);
+    const startedAt = Date.now();
+    await assert.rejects(
+      () => runWebTool({ action: 'search', query: 'cancelled' }, { signal: controller.signal, config: { webAllowPrivate: true } }),
+      error => error.name === 'AbortError',
+    );
+    assert.ok(Date.now() - startedAt < 1000, 'abort must not wait for the search budget');
+    assert.deepEqual(aborted.sort(), ['bing', 'duckduckgo']);
   });
 });

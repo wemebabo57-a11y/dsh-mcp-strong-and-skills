@@ -91,7 +91,9 @@ test('MCP compact/off removes optional tools and enhancement policy', async t =>
 
 test('MCP shell tool is opt-in, honestly annotated, and executes a real command', async t => {
   const c = client(t, 'lean', ['--shell', 'on']);
-  await initialize(c);
+  const init = await initialize(c);
+  assert.match(init.instructions, /独立 MCP 服务没有 DSH 会话沙箱/);
+  assert.equal(init.instructions.includes('受 DSH 沙箱策略约束'), false);
   const listed = await c.request(2, 'tools/list');
   assert.equal(listed.result.tools.length, 7);
   const shell = listed.result.tools.find(tool => tool.name === 'strong_shell');

@@ -117,3 +117,20 @@ test('builtin shell rejects reads and writes that escape through directory links
     await rm(outside, { recursive: true, force: true });
   }
 });
+test('builtin shell covers printf, seq and exit without falling back to MSYS tools', async () => {
+  const root = await makeRoot();
+  try {
+    const run = (command, extra = {}) => runBuiltinShell({ command, cwd: root, root, env: { ...process.env }, ...extra });
+    assert.equal((await run("printf 'a\\tb\\n'")).stdout, 'a\tb\n');
+    assert.equal((await run("printf '%s:%03d\\n' x 7")).stdout, 'x:007\n');
+    assert.equal((await run('seq 3')).stdout, '1\n2\n3\n');
+    assert.equal((await run('seq -w 8 10')).stdout, '08\n09\n10\n');
+    assert.equal((await run('seq 1 2 5')).stdout, '1\n3\n5\n');
+    const stopped = await run("printf 'out\\n'; printf 'err\\n' >&2; exit 7; echo unreachable");
+    assert.equal(stopped.exitCode, 7);
+    assert.equal(stopped.stdout, 'out\n');
+    assert.equal(stopped.stderr, 'err\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -5,7 +5,7 @@ import { buildPolicy } from '../src/engine.mjs';
 
 test('PTC guide is short, concrete and only active in PTC mode', () => {
   assert.ok(PTC_GUIDE.length > 80);
-  assert.ok(PTC_GUIDE.length < 400);
+  assert.ok(PTC_GUIDE.length < 150, String(PTC_GUIDE.length));
   for (const fact of ['run_code', 'Promise.all', 'close', '整个 JSON']) assert.match(PTC_GUIDE, new RegExp(fact.replace('.', '\\.')));
   assert.equal(buildPtcPolicy({ ptcMode: 'auto' }, { available: false }), '');
   assert.equal(buildPtcPolicy({ ptcMode: 'auto' }, { available: true }), PTC_GUIDE);
