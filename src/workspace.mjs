@@ -8,6 +8,7 @@ const BINARY_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.i
 const STYLE_EXTENSIONS = new Set(['.css', '.scss', '.sass', '.less', '.tsx', '.jsx', '.html', '.vue', '.svelte']);
 const ACTIONS = new Set(['map', 'search', 'read', 'diff', 'checks', 'style']);
 const DEFAULT_OUTPUT = 6000;
+const DENIED_NAMES = new Set(['.git', '.ssh', '.aws', '.npmrc', '.netrc']);
 
 export class WorkspaceError extends Error {
   constructor(code, message) {
@@ -31,7 +32,7 @@ function portable(relativePath) {
 
 function deniedSegment(segment) {
   const name = segment.toLowerCase();
-  return ['.git', '.ssh', '.aws', '.npmrc', '.netrc'].includes(name) || name.startsWith('.credentials') || (name.startsWith('.env') && name !== '.env.example') ||
+  return DENIED_NAMES.has(name) || name.startsWith('.credentials') || (name.startsWith('.env') && name !== '.env.example') ||
     /^\.?(?:credentials?|secrets?)(?:[._-]|$)/.test(name) || /\.(?:pem|key|p12|pfx|keystore)$/.test(name) ||
     /^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)(?:\.|$)/.test(name);
 }
@@ -45,7 +46,7 @@ export function isKnowledgePath(value) {
 
 function inside(root, target) {
   const relative = path.relative(root, target);
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+  return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
 }
 
 function clip(text, max = 500) {
@@ -58,11 +59,16 @@ function clip(text, max = 500) {
 function isBinary(buffer) {
   const sample = buffer.subarray(0, 8192);
   let controls = 0;
-  for (const value of sample) {
+  for (let index = 0; index < sample.length; index++) {
+    const value = sample[index];
     if (value === 0) return true;
-    if (value < 32 && ![9, 10, 12, 13].includes(value)) controls++;
+    if (value < 32 && value !== 9 && value !== 10 && value !== 12 && value !== 13) controls++;
   }
   return controls > Math.max(2, sample.length * 0.01);
+}
+
+function sameFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 
 function recordSkip(stats, reason, count = 1) {
@@ -132,7 +138,26 @@ async function runGit(root, args, { signal, maxBytes = 1024 * 1024, timeoutMs = 
   });
 }
 
+// Repo discovery only looks at ancestors, so a missing .git entry proves that
+// spawning Git cannot succeed. This keeps non-Git workspaces off the ~50ms
+// process startup path without changing any result.
+async function hasGitAncestor(root) {
+  let directory = root;
+  for (;;) {
+    try {
+      await fs.lstat(path.join(directory, '.git'));
+      return true;
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') return true;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return false;
+    directory = parent;
+  }
+}
+
 async function gitContainsRoot(root, signal) {
+  if (!(await hasGitAncestor(root))) return false;
   const result = await runGit(root, ['rev-parse', '--show-toplevel'], { signal, maxBytes: 16384 });
   if (result.code !== 0 || result.truncated) return false;
   try {
@@ -145,13 +170,13 @@ async function disabledGitFilters(root, signal) {
   // Git's clean/process filters can run during diff even with --no-textconv.
   // Enumerate their config keys (without executing them), then disable every
   // driver for the diff command. Reject oversized/unreadable configuration.
-  const result = await runGit(root, ['config', '--null', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'], { signal, maxBytes: 32768 });
+  const result = await runGit(root, ['config', '--null', '--name-only', '--get-regexp', '^filter\..*\.(clean|smudge|process|required)$'], { signal, maxBytes: 32768 });
   if (result.truncated || ![0, 1].includes(result.code)) return null;
   const keys = result.stdout.split('\0').filter(Boolean);
   const overrides = [];
   for (const key of keys) {
-    overrides.push('-c', `${key}=${key.endsWith('.required') ? 'false' : ''}`);
-    if (!key.endsWith('.required')) overrides.push('-c', `${key.replace(/\.[^.]+$/, '.required')}=false`);
+    overrides.push('-c', key + '=' + (key.endsWith('.required') ? 'false' : ''));
+    if (!key.endsWith('.required')) overrides.push('-c', key.replace(/\.[^.]+$/, '.required') + '=false');
   }
   return overrides.join('').length < 10000 ? overrides : null;
 }
@@ -178,7 +203,11 @@ export class Workspace {
     return fs.realpath(this.root);
   }
 
-  async _resolve(root, input = '.', { signal, allowMissing = false } = {}) {
+  // One operation resolves the same directory prefixes for every file it visits.
+  // A per-operation memo of already-verified paths removes the repeated
+  // lstat/realpath syscalls without caching across calls, because files change
+  // between operations and each call must observe the current tree.
+  async _resolve(root, input = '.', { signal, allowMissing = false, cache = null } = {}) {
     abortIfNeeded(signal);
     if (typeof input !== 'string' || input.includes('\0') || path.isAbsolute(input) || /^[a-z]:/i.test(input) || /^[/\\]/.test(input)) {
       throw new WorkspaceError('INVALID_PATH', 'Use a relative path inside the workspace.');
@@ -189,63 +218,86 @@ export class Workspace {
     if (segments.some(deniedSegment)) throw new WorkspaceError('SECRET_PATH', 'Secret and Git metadata paths are excluded.');
     const target = path.resolve(root, ...segments);
     if (!inside(root, target)) throw new WorkspaceError('PATH_ESCAPE', 'Path is outside the workspace.');
+    const relative = portable(path.relative(root, target));
+    const settled = cache?.get(relative);
+    if (settled) return settled;
     let cursor = root;
+    let prefix = '';
+    let stat = null;
     for (let index = 0; index < segments.length; index++) {
       abortIfNeeded(signal);
       cursor = path.join(cursor, segments[index]);
-      let stat;
-      try { stat = await fs.lstat(cursor); } catch (error) {
-        if (allowMissing && error.code === 'ENOENT') return { absolute: target, relative: portable(path.relative(root, target)), stat: null };
-        throw error;
+      prefix = prefix ? prefix + '/' + segments[index] : segments[index];
+      let entry = cache?.get(prefix);
+      if (!entry) {
+        let current;
+        try { current = await fs.lstat(cursor); } catch (error) {
+          if (allowMissing && error.code === 'ENOENT') return { absolute: target, relative, stat: null };
+          throw error;
+        }
+        if (current.isSymbolicLink()) throw new WorkspaceError('DISALLOWED_SYMLINK', 'Symbolic links and junctions are excluded.');
+        // Every component so far is a verified non-symlink under an already
+        // resolved root, so an escaping component can only appear here.
+        const actual = await fs.realpath(cursor);
+        if (!inside(root, actual)) throw new WorkspaceError('PATH_ESCAPE', 'Resolved path is outside the workspace.');
+        entry = { absolute: cursor, relative: prefix, stat: current };
+        cache?.set(prefix, entry);
       }
-      if (stat.isSymbolicLink()) throw new WorkspaceError('DISALLOWED_SYMLINK', 'Symbolic links and junctions are excluded.');
-      const actual = await fs.realpath(cursor);
-      if (!inside(root, actual)) throw new WorkspaceError('PATH_ESCAPE', 'Resolved path is outside the workspace.');
+      stat = entry.stat;
       if (index < segments.length - 1 && !stat.isDirectory()) throw new WorkspaceError('INVALID_PATH', 'A parent path is not a directory.');
     }
-    const stat = await fs.lstat(target);
-    return { absolute: target, relative: portable(path.relative(root, target)), stat };
+    // The walk above already lstat'ed the final segment; only the bare root
+    // needs its own stat when no segment ran.
+    if (stat === null) stat = await fs.lstat(target);
+    const resolved = { absolute: target, relative, stat };
+    cache?.set(relative, resolved);
+    return resolved;
   }
 
-  async _inventory(root, selected, stats, signal) {
-    if (selected.stat.isFile()) return [selected.relative];
+  // Streams file names so callers that only need the first matches can stop
+  // early instead of materialising and then re-reading the whole tree. Skip
+  // counters therefore describe the part of the tree an operation visited.
+  async * _files(root, selected, stats, signal, cache) {
+    if (selected.stat.isFile()) { yield selected.relative; return; }
     if (!selected.stat.isDirectory()) throw new WorkspaceError('INVALID_PATH', 'Expected a file or directory.');
-    const list = await gitContainsRoot(root, signal) ? await runGit(root, ['--literal-pathspecs', 'ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', selected.relative || '.'], {
+    const listing = await gitContainsRoot(root, signal) ? await runGit(root, ['--literal-pathspecs', 'ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', selected.relative || '.'], {
       signal, maxBytes: Math.min(4 * 1024 * 1024, this.maxFiles * 1024),
     }) : { code: -1, stdout: '', truncated: false };
-    const files = [];
-    if (list.code === 0 || list.truncated) {
+    if (listing.code === 0 || listing.truncated) {
       stats.ignoreSource = 'git';
-      const entries = list.stdout.split('\0');
-      if (list.truncated) { entries.pop(); stats.scanLimitReached = true; }
+      const entries = listing.stdout.split('\0');
+      if (listing.truncated) { entries.pop(); stats.scanLimitReached = true; }
+      let emitted = 0;
       for (const name of [...new Set(entries.filter(Boolean))].sort()) {
         abortIfNeeded(signal);
         const segments = name.split('/');
         if (segments.some(deniedSegment)) { recordSkip(stats, 'secret'); continue; }
         if (segments.slice(0, -1).some((part) => SKIP_DIRS.has(part.toLowerCase()))) { recordSkip(stats, 'excludedDirectory'); continue; }
         if (BINARY_EXTENSIONS.has(path.extname(name).toLowerCase())) { recordSkip(stats, 'binary'); continue; }
-        if (files.length >= this.maxFiles) { stats.scanLimitReached = true; break; }
+        if (emitted >= this.maxFiles) { stats.scanLimitReached = true; break; }
         try {
-          const resolved = await this._resolve(root, name, { signal });
-          if (resolved.stat.isFile()) files.push(name);
+          const resolved = await this._resolve(root, name, { signal, cache });
+          if (resolved.stat.isFile()) { emitted++; yield name; }
           else recordSkip(stats, 'nonFile');
         } catch (error) {
           if (error.code === 'ABORTED') throw error;
           recordSkip(stats, error.code === 'DISALLOWED_SYMLINK' ? 'symlink' : 'unavailable');
         }
       }
-      return files;
+      return;
     }
     stats.ignoreSource = 'built-in';
     stats.ignoreLimitation = 'Git ignore rules could not be evaluated; only built-in exclusions are applied.';
+    const workspace = this;
+    const maxFiles = this.maxFiles;
     let visitedEntries = 0;
-    const maxEntries = Math.max(100, this.maxFiles * 8);
-    const visit = async (directory) => {
+    let emitted = 0;
+    const maxEntries = Math.max(100, maxFiles * 8);
+    const visit = async function* (directory, directoryPath) {
       abortIfNeeded(signal);
       const entries = [];
       try {
-        const checked = await this._resolve(root, portable(path.relative(root, directory)), { signal });
-        const directoryHandle = await fs.opendir(checked.absolute);
+        const directoryHandle = await fs.opendir(directory);
         for await (const entry of directoryHandle) {
           abortIfNeeded(signal);
           if (visitedEntries >= maxEntries) { stats.scanLimitReached = true; break; }
@@ -260,18 +312,17 @@ export class Workspace {
       entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
       for (const entry of entries) {
         abortIfNeeded(signal);
-        if (files.length >= this.maxFiles) { stats.scanLimitReached = true; return; }
+        if (emitted >= maxFiles) { stats.scanLimitReached = true; return; }
         if (entry.isSymbolicLink()) { recordSkip(stats, 'symlink'); continue; }
         if (deniedSegment(entry.name)) { recordSkip(stats, 'secret'); continue; }
         if (entry.isDirectory() && SKIP_DIRS.has(entry.name.toLowerCase())) { recordSkip(stats, 'excludedDirectory'); continue; }
-        const absolute = path.join(directory, entry.name);
-        const relative = portable(path.relative(root, absolute));
+        const relative = directoryPath ? directoryPath + '/' + entry.name : entry.name;
         try {
-          const resolved = await this._resolve(root, relative, { signal });
-          if (resolved.stat.isDirectory()) await visit(resolved.absolute);
+          const resolved = await workspace._resolve(root, relative, { signal, cache });
+          if (resolved.stat.isDirectory()) yield* visit(resolved.absolute, relative);
           else if (resolved.stat.isFile()) {
             if (BINARY_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) recordSkip(stats, 'binary');
-            else files.push(relative);
+            else { emitted++; yield relative; }
           } else recordSkip(stats, 'nonFile');
         } catch (error) {
           if (error.code === 'ABORTED') throw error;
@@ -279,20 +330,25 @@ export class Workspace {
         }
       }
     };
-    await visit(selected.absolute);
+    yield* visit(selected.absolute, selected.relative);
+  }
+
+  async _inventory(root, selected, stats, signal, cache) {
+    const files = [];
+    for await (const name of this._files(root, selected, stats, signal, cache)) files.push(name);
     return files;
   }
 
-  async _sample(root, name, stats, signal) {
+  async _sample(root, name, stats, signal, cache) {
     abortIfNeeded(signal);
     try {
-      const checked = await this._resolve(root, name, { signal });
+      const checked = await this._resolve(root, name, { signal, cache });
       if (!checked.stat.isFile()) { recordSkip(stats, 'nonFile'); return false; }
       if (checked.stat.size > this.maxFileBytes) { recordSkip(stats, 'largeFile'); return false; }
       const handle = await fs.open(checked.absolute, 'r');
       try {
         const opened = await handle.stat();
-        if (opened.dev !== checked.stat.dev || opened.ino !== checked.stat.ino) { recordSkip(stats, 'changedDuringRead'); return false; }
+        if (!sameFile(opened, checked.stat)) { recordSkip(stats, 'changedDuringRead'); return false; }
         const buffer = Buffer.alloc(Math.min(8192, opened.size));
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
         if (isBinary(buffer.subarray(0, bytesRead))) { recordSkip(stats, 'binary'); return false; }
@@ -308,24 +364,26 @@ export class Workspace {
 
   async list(selected = '.', { signal } = {}) {
     const root = await this._root(signal);
-    const resolved = await this._resolve(root, selected, { signal });
+    const cache = new Map();
+    const resolved = await this._resolve(root, selected, { signal, cache });
     const stats = { scannedFiles: 0, skipped: {}, scanLimitReached: false };
-    const files = await this._inventory(root, resolved, stats, signal);
+    const files = await this._inventory(root, resolved, stats, signal, cache);
     return { files, stats, truncated: Boolean(stats.scanLimitReached) };
   }
 
-  async _text(root, name, stats, signal) {
+  async _text(root, name, stats, signal, cache) {
     abortIfNeeded(signal);
     try {
-      const checked = await this._resolve(root, name, { signal });
+      const checked = await this._resolve(root, name, { signal, cache });
       if (!checked.stat.isFile()) { recordSkip(stats, 'nonFile'); return null; }
       if (checked.stat.size > this.maxFileBytes) { recordSkip(stats, 'largeFile'); return null; }
       const handle = await fs.open(checked.absolute, 'r');
       try {
         // Recheck after opening to reject replaced paths before reading content.
-        const afterOpen = await this._resolve(root, name, { signal });
+        const afterOpen = await fs.lstat(checked.absolute);
+        if (afterOpen.isSymbolicLink()) { recordSkip(stats, 'symlink'); return null; }
         const openedStat = await handle.stat();
-        if (openedStat.dev !== checked.stat.dev || openedStat.ino !== checked.stat.ino || openedStat.dev !== afterOpen.stat.dev || openedStat.ino !== afterOpen.stat.ino) {
+        if (!sameFile(openedStat, checked.stat) || !sameFile(openedStat, afterOpen)) {
           recordSkip(stats, 'changedDuringRead');
           return null;
         }
@@ -342,7 +400,8 @@ export class Workspace {
         const bytes = buffer.subarray(0, offset);
         if (isBinary(bytes)) { recordSkip(stats, 'binary'); return null; }
         stats.scannedFiles++;
-        return bytes.toString('utf8').replace(/^\uFEFF/, '');
+        const content = bytes.toString('utf8');
+        return content.charCodeAt(0) === 0xFEFF ? content.slice(1) : content;
       } finally { await handle.close(); }
     } catch (error) {
       if (error.code === 'ABORTED') throw error;
@@ -355,7 +414,8 @@ export class Workspace {
     abortIfNeeded(signal);
     if (!args || typeof args !== 'object' || !ACTIONS.has(args.action)) throw new WorkspaceError('INVALID_ACTION', 'Choose map, search, read, diff, checks, or style.');
     const root = await this._root(signal);
-    const selected = await this._resolve(root, args.path ?? '.', { signal, allowMissing: args.action === 'diff' });
+    const cache = new Map();
+    const selected = await this._resolve(root, args.path ?? '.', { signal, cache, allowMissing: args.action === 'diff' });
     const limit = this.unlimitedTokens ? bounded(args.limit, 5000, 1, 5000) : bounded(args.limit, 80, 1, 200);
     const start = bounded(args.start, 1, 1, Number.MAX_SAFE_INTEGER);
     const stats = { scannedFiles: 0, skipped: {}, scanLimitReached: false };
@@ -389,7 +449,7 @@ export class Workspace {
           if (BINARY_EXTENSIONS.has(path.extname(name).toLowerCase())) { recordSkip(stats, 'binary'); continue; }
           if (safe.length >= this.maxFiles || argumentChars + name.length * 2 + 3 > 28000) { stats.scanLimitReached = true; break; }
           try {
-            const checked = await this._resolve(root, name, { signal, allowMissing: true });
+            const checked = await this._resolve(root, name, { signal, cache, allowMissing: true });
             if (checked.stat && (!checked.stat.isFile() || checked.stat.size > this.maxFileBytes)) { recordSkip(stats, 'largeFile'); continue; }
             safe.push(name);
             argumentChars += name.length * 2 + 3;
@@ -410,7 +470,7 @@ export class Workspace {
       }
     } else if (args.action === 'read') {
       if (!selected.stat.isFile()) throw new WorkspaceError('INVALID_PATH', 'Read requires a file path.');
-      const content = await this._text(root, selected.relative, stats, signal);
+      const content = await this._text(root, selected.relative, stats, signal, cache);
       result.lines = [];
       if (content !== null) {
         const lines = content.split(/\r?\n/);
@@ -425,12 +485,11 @@ export class Workspace {
       if (args.action === 'search' && (typeof args.query !== 'string' || !args.query || args.query.length > 1000)) {
         throw new WorkspaceError('INVALID_QUERY', 'Search requires a nonempty literal query of at most 1000 characters.');
       }
-      const files = await this._inventory(root, selected, stats, signal);
       if (args.action === 'map') {
         result.files = [];
         result.counts = {};
-        for (const name of files) {
-          if (!(await this._sample(root, name, stats, signal))) continue;
+        for (const name of await this._inventory(root, selected, stats, signal, cache)) {
+          if (!(await this._sample(root, name, stats, signal, cache))) continue;
           const extension = path.extname(name).toLowerCase() || '(none)';
           result.counts[extension] = (result.counts[extension] || 0) + 1;
           if (result.files.length < limit) result.files.push(name); else truncated = true;
@@ -440,11 +499,11 @@ export class Workspace {
         result.configs = [];
         result.executed = false;
         const configPattern = /^(?:tsconfig(?:\.[^.]+)?\.json|(?:vite|vitest|jest|webpack|rollup|eslint|playwright|cypress)\.config\.[cm]?[jt]s|\.eslintrc(?:\..+)?|pyproject\.toml|pytest\.ini|tox\.ini|Cargo\.toml|go\.mod|Makefile|CMakeLists\.txt|pom\.xml|build\.gradle(?:\.kts)?|deno\.jsonc?)$/i;
-        for (const name of files) {
+        for (const name of await this._inventory(root, selected, stats, signal, cache)) {
           abortIfNeeded(signal);
           const basename = path.posix.basename(name);
           if (basename === 'package.json') {
-            const content = await this._text(root, name, stats, signal);
+            const content = await this._text(root, name, stats, signal, cache);
             if (content === null) continue;
             try {
               const parsed = JSON.parse(content);
@@ -465,40 +524,83 @@ export class Workspace {
         const terms = !style && args.mode === 'terms' ? query.trim().split(/\s+/).filter(Boolean) : [];
         const brandIntent = typeof args.brandIntent === 'string' ? clip(args.brandIntent, 300) : this.brandIntent;
         const allowBrandColors = args.allowBrandColors === true || this.allowBrandColors || Boolean(brandIntent);
+        const unlimited = this.unlimitedTokens;
+        // Literal queries need one normalised copy of the file: per-line
+        // lowercasing and per-line query normalisation are pure overhead.
+        const needle = caseSensitive ? query : query.toLowerCase();
+        const loweredTerms = caseSensitive ? terms : terms.map((term) => term.toLowerCase());
+        const literalScan = !style && !terms.length && !/[\r\n]/.test(needle);
+        const patterns = [];
+        if (!allowBrandColors) patterns.push({ kind: 'generic-palette', regex: /#(?:0f172a|1e293b|172554|1e3a8a|1d4ed8|2563eb|3b82f6|4f46e5|6366f1|7c3aed|8b5cf6)\b|\b(?:bg|from|via|to)-(?:blue|indigo|violet|purple)-(?:[1-9]00|950)\b|\bnavy\b/gi, message: 'Common navy/blue/purple default palette; confirm that this choice fits the requested visual direction.' });
+        patterns.push({ kind: 'gradient', regex: /(?:linear|radial|conic)-gradient\s*\(|\bbg-gradient-to-[a-z]+\b|\bbg-linear-to-[a-z]+\b/gi, message: 'Gradient detected; confirm it serves a deliberate visual purpose.' });
         if (style) {
           result.advisory = true;
           result.brandIntent = brandIntent || null;
           result.note = 'Heuristic suggestions only. Preserve colors and gradients when they express an intentional brand or user request.';
         }
-        outer: for (const name of files) {
+        outer: for await (const name of this._files(root, selected, stats, signal, cache)) {
           if (style && !STYLE_EXTENSIONS.has(path.extname(name).toLowerCase())) continue;
-          const content = await this._text(root, name, stats, signal);
+          const content = await this._text(root, name, stats, signal, cache);
           if (content === null) continue;
-          const lines = content.split(/\r?\n/);
-          for (let index = 0; index < lines.length; index++) {
-            abortIfNeeded(signal);
-            const line = lines[index];
-            if (style) {
-              const patterns = [];
-              if (!allowBrandColors) patterns.push({ kind: 'generic-palette', regex: /#(?:0f172a|1e293b|172554|1e3a8a|1d4ed8|2563eb|3b82f6|4f46e5|6366f1|7c3aed|8b5cf6)\b|\b(?:bg|from|via|to)-(?:blue|indigo|violet|purple)-(?:[1-9]00|950)\b|\bnavy\b/gi, message: 'Common navy/blue/purple default palette; confirm that this choice fits the requested visual direction.' });
-              patterns.push({ kind: 'gradient', regex: /(?:linear|radial|conic)-gradient\s*\(|\bbg-gradient-to-[a-z]+\b|\bbg-linear-to-[a-z]+\b/gi, message: 'Gradient detected; confirm it serves a deliberate visual purpose.' });
+          if (style) {
+            const lines = content.split(/\r?\n/);
+            for (let index = 0; index < lines.length; index++) {
+              abortIfNeeded(signal);
+              const line = lines[index];
               for (const pattern of patterns) {
                 pattern.regex.lastIndex = 0;
                 const match = pattern.regex.exec(line);
                 if (match) entries.push({ path: name, line: index + 1, column: match.index + 1, kind: pattern.kind, token: match[0], message: pattern.message });
                 if (entries.length >= limit) { truncated = true; break outer; }
               }
-            } else {
-              const haystack = caseSensitive ? line : line.toLowerCase();
-              const needle = caseSensitive ? query : query.toLowerCase();
-              const column = terms.length ? (terms.every(term => haystack.includes(caseSensitive ? term : term.toLowerCase())) ? haystack.indexOf(caseSensitive ? terms[0] : terms[0].toLowerCase()) : -1) : haystack.indexOf(needle);
-              if (column !== -1) {
-                const offset = this.unlimitedTokens ? 0 : Math.max(0, column - 200);
-                entries.push({ path: name, line: index + 1, column: column + 1, text: (offset ? '…' : '') + (this.unlimitedTokens ? line : clip(line.slice(offset), 700)) });
-                if (!this.unlimitedTokens && (offset || line.length > 700)) truncated = true;
-              }
-              if (entries.length >= limit) { truncated = true; break outer; }
             }
+            continue;
+          }
+          if (literalScan) {
+            // Case-insensitive literal search: normalise the whole file once and
+            // map each match back to its line. The length check keeps offsets
+            // exact when a case mapping would change character counts.
+            const lowered = caseSensitive ? content : content.toLowerCase();
+            if (lowered.length === content.length) {
+              let lineStart = 0;
+              let lineNumber = 1;
+              let newline = lowered.indexOf('\n', 0);
+              let position = lowered.indexOf(needle);
+              while (position !== -1) {
+                abortIfNeeded(signal);
+                while (newline !== -1 && newline < position) {
+                  lineStart = newline + 1;
+                  lineNumber++;
+                  newline = lowered.indexOf('\n', lineStart);
+                }
+                const lineEnd = newline === -1 ? content.length : newline > lineStart && content.charCodeAt(newline - 1) === 13 ? newline - 1 : newline;
+                const line = content.slice(lineStart, lineEnd);
+                const column = position - lineStart;
+                const offset = unlimited ? 0 : Math.max(0, column - 200);
+                entries.push({ path: name, line: lineNumber, column: column + 1, text: (offset ? '…' : '') + (unlimited ? line : clip(line.slice(offset), 700)) });
+                if (!unlimited && (offset || line.length > 700)) truncated = true;
+                if (entries.length >= limit) { truncated = true; break outer; }
+                if (newline === -1) break;
+                lineStart = newline + 1;
+                lineNumber++;
+                newline = lowered.indexOf('\n', lineStart);
+                position = lowered.indexOf(needle, lineStart);
+              }
+              continue;
+            }
+          }
+          const lines = content.split(/\r?\n/);
+          for (let index = 0; index < lines.length; index++) {
+            abortIfNeeded(signal);
+            const line = lines[index];
+            const haystack = caseSensitive ? line : line.toLowerCase();
+            const column = terms.length ? (terms.every((term, termIndex) => haystack.includes(caseSensitive ? term : loweredTerms[termIndex])) ? haystack.indexOf(caseSensitive ? terms[0] : loweredTerms[0]) : -1) : haystack.indexOf(needle);
+            if (column !== -1) {
+              const offset = unlimited ? 0 : Math.max(0, column - 200);
+              entries.push({ path: name, line: index + 1, column: column + 1, text: (offset ? '…' : '') + (unlimited ? line : clip(line.slice(offset), 700)) });
+              if (!unlimited && (offset || line.length > 700)) truncated = true;
+            }
+            if (entries.length >= limit) { truncated = true; break outer; }
           }
         }
       }

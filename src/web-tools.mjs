@@ -7,6 +7,11 @@ const MAX_BYTES = 2 * 1024 * 1024;
 const CACHE_TTL = 10 * 60 * 1000;
 const CACHE_LIMIT = 10;
 const CACHE_ROOTS = 32;
+// Open results are far larger than search rows, so they get their own byte-bounded
+// LRU instead of sharing the per-root search maps: at most OPEN_CACHE_LIMIT pages and
+// never more than OPEN_CACHE_BYTES of decoded text held in memory.
+const OPEN_CACHE_LIMIT = 20;
+const OPEN_CACHE_BYTES = 16 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const TRACKING = /^(utm_|fbclid$|gclid$|spm$|ref$|source$)/i;
 
@@ -18,6 +23,9 @@ export const SEARCH_ENGINE_TIMEOUT_MS = 4000;
 export const SEARCH_BUDGET_MS = 8000;
 
 export const WEB_SEARCH_LIMIT = 10;
+export const WEB_CACHE_TTL_MS = CACHE_TTL;
+export const WEB_OPEN_CACHE_LIMIT = OPEN_CACHE_LIMIT;
+export const WEB_OPEN_CACHE_BYTES = OPEN_CACHE_BYTES;
 
 export const WEB_TOOL = Object.freeze({
   name: 'strong_web',
@@ -37,6 +45,8 @@ export const WEB_TOOL = Object.freeze({
 });
 
 const cache = new Map();
+const openCache = new Map();
+let openCacheBytes = 0;
 
 function cacheKey(root) {
   return typeof root === 'string' && root ? root : '(default)';
@@ -58,10 +68,24 @@ function rootEntry(root, create = false) {
   return entry;
 }
 
+// Search engines ignore letter case and collapse whitespace, and NFKC folds
+// full-width characters typed through an IME, so every such variant of a query
+// shares one cache row. Plain multi-word queries (no quotes, operators or field
+// prefixes) are also matched as a term bag: engines score "alpha beta" and
+// "beta alpha" the same way, so sorting the terms lets either order hit.
+// Quoted phrases and operators stay exact because their order changes meaning.
+const QUERY_SYNTAX = /["'`()|+\-*:]|\b(?:and|or|not|site|filetype|intitle|inurl)\b/i;
+
+function searchCacheKey(query) {
+  const normalized = String(query).normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (normalized.includes(' ') && !QUERY_SYNTAX.test(normalized)) return normalized.split(' ').sort().join(' ');
+  return normalized;
+}
+
 function rememberSearch(root, query, results) {
   const entry = rootEntry(root, true);
   const now = Date.now();
-  entry.searches.set(query, { at: now, results });
+  entry.searches.set(searchCacheKey(query), { at: now, results });
   entry.latest = new Map(results.map(item => [item.id, item]));
   entry.latestAt = now;
   for (const [key, value] of entry.searches) if (now - value.at > CACHE_TTL) entry.searches.delete(key);
@@ -70,9 +94,57 @@ function rememberSearch(root, query, results) {
 
 function recallSearch(root, query) {
   const entry = rootEntry(root);
-  const hit = entry?.searches.get(query);
+  const hit = entry?.searches.get(searchCacheKey(query));
   if (!hit || Date.now() - hit.at > CACHE_TTL) return null;
   return hit.results;
+}
+
+// A cached page is keyed by its canonical URL: tracking parameters and fragments
+// are dropped (canonicalUrl) and the remaining parameters are sorted, because
+// servers treat ?a=1&b=2 and ?b=2&a=1 as the same resource.
+function canonicalOpenUrl(value) {
+  const canonical = canonicalUrl(value);
+  if (!canonical) return '';
+  const url = new URL(canonical);
+  url.searchParams.sort();
+  return url.toString();
+}
+
+function openCacheKey(url, allowPrivate) {
+  // Private-mode pages must never satisfy a later public-mode open: the SSRF guard
+  // lives inside request(), which a cache hit skips entirely.
+  return (allowPrivate ? 'private|' : 'public|') + (canonicalOpenUrl(url) || url);
+}
+
+function recallOpen(url, allowPrivate) {
+  const key = openCacheKey(url, allowPrivate);
+  const entry = openCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.at > CACHE_TTL) {
+    openCache.delete(key);
+    openCacheBytes -= entry.bytes;
+    return null;
+  }
+  // Refresh LRU recency but keep `at`: a hit must not extend the page lifetime.
+  openCache.delete(key);
+  openCache.set(key, entry);
+  return entry;
+}
+
+function rememberOpen(url, allowPrivate, page) {
+  const key = openCacheKey(url, allowPrivate);
+  const bytes = Buffer.byteLength(page.text, 'utf8');
+  const previous = openCache.get(key);
+  if (previous) openCacheBytes -= previous.bytes;
+  openCache.delete(key);
+  openCache.set(key, { at: Date.now(), bytes, ...page });
+  openCacheBytes += bytes;
+  for (const [other, entry] of openCache) {
+    if (openCache.size <= OPEN_CACHE_LIMIT && openCacheBytes <= OPEN_CACHE_BYTES) break;
+    if (other === key) break; // keep the fresh entry even if it alone exceeds the budget
+    openCache.delete(other);
+    openCacheBytes -= entry.bytes;
+  }
 }
 
 function findByAlias(root, alias) {
@@ -83,6 +155,8 @@ function findByAlias(root, alias) {
 
 export function clearWebCache() {
   cache.clear();
+  openCache.clear();
+  openCacheBytes = 0;
 }
 
 function safeCodePoint(value) {
@@ -435,23 +509,40 @@ function lines(text, maxChars) {
     .slice(0, maxChars);
 }
 
+// The cached page keeps the full extracted text, so one entry serves every maxChars
+// window and each caller still gets its own links array to mutate safely.
+function pageResult(page, maxChars) {
+  return {
+    url: page.url,
+    title: page.title,
+    description: page.description,
+    text: lines(page.text, maxChars),
+    links: page.links.map(link => ({ ...link })),
+    truncated: page.text.length > maxChars,
+  };
+}
+
 async function open(target, maxChars, signal, allowPrivate) {
   const value = String(target ?? '').trim();
   if (!value) throw new WorkspaceError('INVALID_ARGUMENTS', 'open 需要 target（结果 id 或网址）。');
   if (!/^https?:\/\//i.test(value)) throw new WorkspaceError('INVALID_ARGUMENTS', 'open 的 target 必须是 http(s) 网址或结果 id。');
+  signal?.throwIfAborted();
+  const cached = recallOpen(value, allowPrivate);
+  if (cached) return pageResult(cached, maxChars);
   const response = await request(value, { signal, allowPrivate });
   const contentType = response.headers.get('content-type') ?? '';
   if (!/html|xml|text/i.test(contentType)) throw new WorkspaceError('WEB_NOT_HTML', '该地址不是网页文本：' + contentType);
   const body = await readText(response);
   const page = extractPage(body, response.url || value);
-  return {
+  const stored = {
     url: response.url || value,
     title: page.title,
     description: page.description,
-    text: lines(page.text, maxChars),
+    text: page.text,
     links: page.links,
-    truncated: page.text.length > maxChars,
   };
+  rememberOpen(value, allowPrivate, stored);
+  return pageResult(stored, maxChars);
 }
 
 export async function runWebTool(args = {}, { signal, root = '', config = {} } = {}) {

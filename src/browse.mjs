@@ -68,6 +68,62 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function abortReason(signal) {
+  return signal?.reason instanceof Error ? signal.reason : new WorkspaceError('ABORTED', 'Operation cancelled.');
+}
+
+// Read-only actions that do not need an in-flight wait to run out first.
+export const WAIT_SHORTCUTS = Object.freeze(['snapshot', 'screenshot']);
+
+/**
+ * One interruptible sleep per browser session. A queued snapshot, screenshot or
+ * close wakes the waiter instead of sitting behind the full 30 s a model asked
+ * for; a wait that runs alone still sleeps for its whole duration.
+ */
+export class WaitGate {
+  constructor() {
+    this.pending = null;
+  }
+
+  get active() {
+    return Boolean(this.pending);
+  }
+
+  wake() {
+    const waiter = this.pending;
+    if (!waiter) return false;
+    waiter.finish(true);
+    return true;
+  }
+
+  wait(ms, signal) {
+    const requested = Math.max(0, Number(ms) || 0);
+    if (signal?.aborted) return Promise.reject(abortReason(signal));
+    if (!requested) return Promise.resolve({ waitedMs: 0, interrupted: false });
+    this.wake();
+    const started = Date.now();
+    return new Promise((resolve, reject) => {
+      let onAbort = null;
+      const waiter = {
+        timer: null,
+        finish: (interrupted, error) => {
+          if (this.pending !== waiter) return;
+          this.pending = null;
+          clearTimeout(waiter.timer);
+          if (onAbort) signal?.removeEventListener('abort', onAbort);
+          if (error) reject(error);
+          else resolve({ waitedMs: Date.now() - started, interrupted });
+        },
+      };
+      onAbort = () => waiter.finish(false, abortReason(signal));
+      this.pending = waiter;
+      waiter.timer = setTimeout(() => waiter.finish(false), requested);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) waiter.finish(false, abortReason(signal));
+    });
+  }
+}
+
 class Cdp {
   constructor(socket) {
     this.socket = socket;
@@ -199,7 +255,7 @@ async function startSession(executable) {
     await cdp.send('Page.enable').catch(() => {});
     await cdp.send('Runtime.enable').catch(() => {});
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
-    return { executable, cdp, ...launched, queue: Promise.resolve(), pending: 0, lastUsed: Date.now(), shotSeq: 0, shotDir: path.join(launched.profile, 'shots') };
+    return { executable, cdp, ...launched, queue: Promise.resolve(), gate: new WaitGate(), pending: 0, lastUsed: Date.now(), shotSeq: 0, shotDir: path.join(launched.profile, 'shots') };
   } catch (error) {
     try { launched.child.kill('SIGKILL'); } catch {}
     children.delete(launched.child);
@@ -210,6 +266,7 @@ async function startSession(executable) {
 
 async function closeSession(session) {
   if (session.closing) return session.closing;
+  session.gate?.wake();
   session.closing = (async () => {
     session.cdp.close();
     try { session.child.kill('SIGKILL'); } catch {}
@@ -323,7 +380,7 @@ async function typeText(cdp, selector, text) {
   return true;
 }
 
-async function runAction(session, args) {
+async function runAction(session, args, signal) {
   const action = args.action;
   const maxChars = Math.min(Math.max(Number(args.maxChars ?? 4000) || 4000, 500), 20000);
   if (action === 'close') {
@@ -375,9 +432,8 @@ async function runAction(session, args) {
   }
   if (action === 'wait') {
     const requested = Math.min(Math.max(Number(args.ms ?? 1000) || 0, 0), 30000);
-    const started = Date.now();
-    await delay(requested);
-    return { action, waitedMs: Date.now() - started };
+    const outcome = await session.gate.wait(requested, signal);
+    return { action, waitedMs: outcome.waitedMs, ...(outcome.interrupted ? { interrupted: true } : {}) };
   }
   throw new WorkspaceError('INVALID_ARGUMENTS', '不支持的 action：' + action);
 }
@@ -394,15 +450,19 @@ export async function runBrowseTool(args = {}, { root = '', config = {}, signal 
     if (!session) return { action, closed: true, note: '当前没有运行中的浏览器。' };
     sessions.delete(key);
     clearInterval(session.timer);
+    session.gate.wake();
     await closeQueued(session);
     return { action, closed: true };
   }
   const session = await sessionFor(key, config);
   session.lastUsed = Date.now();
   session.pending += 1;
+  // A read-only snapshot or screenshot does not need the page to sit still, so
+  // cut an in-flight wait short instead of queueing up to 30 s behind it.
+  if (WAIT_SHORTCUTS.includes(action)) session.gate.wake();
   const work = session.queue.then(async () => {
     signal?.throwIfAborted();
-    const result = await runAction(session, args);
+    const result = await runAction(session, args, signal);
     session.lastUsed = Date.now();
     return result;
   });

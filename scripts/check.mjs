@@ -7,7 +7,7 @@ import { budgetReport } from '../src/engine.mjs';
 const root = new URL('../', import.meta.url);
 const nodeEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', NO_COLOR: '1' };
 for (const directory of ['src', 'bin', 'client', 'scripts', 'test']) {
-  for (const file of await readdir(new URL(`${directory}/`, root))) {
+  for (const file of await readdir(new URL(`${directory}/`, root), { recursive: true })) {
     if (!/\.[cm]?js$/.test(file)) continue;
     const result = spawnSync(process.execPath, ['--check', fileURLToPath(new URL(`${directory}/${file}`, root))], { encoding: 'utf8', env: nodeEnv });
     if (result.status !== 0) throw new Error(result.stderr || `Syntax check failed: ${file}`);

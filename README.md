@@ -21,6 +21,8 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 **0.4.3 预览版把 Shell 接入 DSH 沙箱并改为默认执行路径：** 开启「Shell 工具」后，AI 直接使用 `strong_shell`，宿主原生 bash/pwsh 调用会被拦截并收到改用提示（Shell 关闭或工具不可见时不拦截）。命令跟随当前会话的沙箱策略：只读/工作区写入模式由 DSH 沙箱运行器约束，`danger-full-access` 才全权执行，缺少沙箱服务时失败关闭。每路输出上限 64 KiB 并保留开头与末尾，后台子进程不再拖住调用，非 UTF-8 输出按 GBK 回退解码。Windows ACL 沙箱无法启动 Git Bash 时，`auto` 自动改用内置 Bash；固定 `git-bash` 会返回明确错误而不是空输出。Electron 宿主的沙箱运行器现在会带上 `ELECTRON_RUN_AS_NODE` 与宿主 preload，不再静默退出。`strong_web` 搜索改为多引擎并发竞速，实测中位耗时从 11.1 秒降到 0.25 秒。常驻提示词再降约 22%，默认 6 个入口约 1,383 tokens，开启 Shell 后 7 个入口约 1,753 tokens。0.4.2 的 Bing 解包、超时收尾、点击校验与 PTC 截图修复继续保留。
 
+**0.4.3-preview.2 重写内置 Bash 并完成全链路性能优化：** 内置 Bash 不再是单行分词器，而是带词法/语法/展开/执行分层的纯 JS 解释器，支持函数、条件循环、数组、`[[ ]]`、heredoc、管道重定向、`pipefail` 与 EXIT trap，并内置 48 个常用 coreutils 及 `sed`、`awk`；与 Git Bash 5.2 的 172 项差分用例全部一致。性能方面：输出预算裁剪约 **500×**，工作区 `search` 提升 **4–57×**，运行时配置解析 **27–121×**，流式尾部收集最高 **447×**，网页打开/搜索缓存命中 **12–23×**。完整数据、验证与已知边界见[更新记录](CHANGELOG.md)。
+
 **保留 0.3.0 的功能更新：**
 - **修复 we need to 思维**：旧版只有在模型名含 `deepseek` 且增强思考开启时才注入，其他模型或关闭增强思考后勾选确实没有效果。现在只取决于该开关，所有模型、增强思考关闭时都生效，并明确要求先写下 `We need to …` 目标，再展开证据、行动与验证。
 - **提升通用能力**：强化契约核对、最小完整改动、失败边界、自审与按证据验证；Pro/Flash 策略同步加强。
@@ -28,7 +30,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 模型继续使用宿主当前 profile 启用的编辑、终端、联网、浏览器与子代理工具。本插件在本地加载技能、检索文件，不在后台发起模型请求。
 
-> **本轮验证：** 197 项自动化测试与静态预算门禁通过；新增覆盖沙箱包装与失败关闭、Windows 沙箱下的后端回退、Electron 运行器环境、64 KiB 首尾保留、后台命令收尾、GBK 解码、原生 shell 路由拦截，以及搜索并发竞速。真实网络复测 5 个查询，中位耗时从 11.1 秒降到 0.25 秒。另在 DSH 0.2.1-rc.3 无头会话中用真实模型复验四次短指令：未被点名工具时，模型自行选择 `strong_shell`，后端为内置 Bash，沙箱模式 `workspace-write`、`enforced: true`，命令输出正确；固定 `pwsh` 时经 Windows PowerShell 5.1 在沙箱内返回正确输出；固定 `git-bash` 时返回明确的不可用错误并拒绝在沙箱外执行，模型没有尝试绕过。复验未用于生成项目代码。详见[知识库说明](docs/knowledge.md)与[兼容性记录](docs/compatibility.md)。
+> **本轮验证：** 436 项自动化测试与静态预算门禁通过；新增覆盖沙箱包装与失败关闭、Windows 沙箱下的后端回退、Electron 运行器环境、64 KiB 首尾保留、后台命令收尾、GBK 解码、原生 shell 路由拦截、搜索并发竞速、内置 Bash 的 172 项 Git Bash 差分用例，以及预算/工作区/代码工具/运行时/网页缓存五组性能回归。真实网络复测 5 个查询，中位耗时从 11.1 秒降到 0.25 秒。另在 DSH 0.2.1-rc.3 无头会话中用真实模型复验四次短指令：未被点名工具时，模型自行选择 `strong_shell`，后端为内置 Bash，沙箱模式 `workspace-write`、`enforced: true`，命令输出正确；固定 `pwsh` 时经 Windows PowerShell 5.1 在沙箱内返回正确输出；固定 `git-bash` 时返回明确的不可用错误并拒绝在沙箱外执行，模型没有尝试绕过。复验未用于生成项目代码。详见[知识库说明](docs/knowledge.md)与[兼容性记录](docs/compatibility.md)。
 
 ## 项目设定与知识库
 
@@ -38,7 +40,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 
 保存的是来源登记，首次工具调用才访问资料。默认只列目录，检索小量带来源、路径、行号的命中，再定向读片段；无限模式下知识结果仍最多 6000 字符。卡片占用少量常驻上下文，源码变化后请更新。[教程与 CLI/MCP 配置](docs/knowledge.md)。
 
-0.4.3-preview.1 的发行说明见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.4.3-preview.1)，也可按下文直接从仓库安装。
+0.4.3-preview.2 的内置 Bash 重写与性能优化见[更新记录](CHANGELOG.md)；0.4.3-preview.1 的发行说明见 [GitHub Release](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/releases/tag/0.4.3-preview.1)，也可按下文直接从仓库安装。
 
 ## 快速开始
 
@@ -66,7 +68,7 @@ dsh --profile web
 需要固定版本时，可在仓库来源后追加发布标签或提交 SHA：
 
 ```sh
-dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.4.3-preview.1
+dsh plugin --profile web add github:wemebabo57-a11y/dsh-mcp-strong-and-skills#0.4.3-preview.2
 ```
 
 卸载时使用包名，然后重启对应 profile：
@@ -328,7 +330,7 @@ flowchart LR
 ```
 
 - 默认四个仓库工具只读，不执行项目脚本或任意命令。`checks` 返回的建议由模型结合任务与宿主权限决定是否执行。`strong_web` 只抓取网页文本，`strong_browse` 会启动本机无头浏览器并访问目标网址；两者都只在被调用时联网。只有用户显式开启「Shell 工具」后，才会注册 `strong_shell`，并作为 AI 的默认 shell 执行路径。
-- **原生插件中**，`strong_shell` 与内置 Bash 都跟随当前会话的 DSH 沙箱策略：只读/工作区写入模式通过宿主沙箱运行器限制越权文件访问，`danger-full-access` 才全权执行；缺少沙箱服务时失败关闭。工作目录从项目内开始，实际可访问范围由沙箱模式决定。独立 MCP 服务没有 DSH 会话沙箱，显式 `--shell on` 时以当前用户权限运行。内置 Bash 会拒绝内置命令的目录穿越，并按同一策略包装外部程序；它不是完整 Bash，也不是额外的隔离层。
+- **原生插件中**，`strong_shell` 与内置 Bash 都跟随当前会话的 DSH 沙箱策略：只读/工作区写入模式通过宿主沙箱运行器限制越权文件访问，`danger-full-access` 才全权执行；缺少沙箱服务时失败关闭。工作目录从项目内开始，实际可访问范围由沙箱模式决定。独立 MCP 服务没有 DSH 会话沙箱，显式 `--shell on` 时以当前用户权限运行。内置 Bash 已重写为纯 JS 的高保真解释器：词法/语法/展开/执行分层，支持函数、条件与循环、数组、`[[ ]]`、heredoc、管道与重定向、`set -o pipefail`、EXIT trap，并内置 40 余个常用 coreutils 及 `sed`、`awk`；与 Git Bash 5.2 的 172 项差分用例全部一致。它仍不是完整 Bash（无作业控制、进程替换与少数高级扩展），会拒绝内置命令的目录穿越，并按同一策略包装外部程序；它不是额外的隔离层。
 - 默认排除生成目录、二进制、大文件和常见敏感路径，拒绝目录穿越与符号链接。Git 可用时遵循其 ignore 规则，否则明确说明仅使用内置排除规则。普通源码中的敏感信息仍可能被读取；无限模式只放宽读取范围，不取消安全排除。
 - `diff` 不含暂存区或未跟踪文件；不支持的 Git 环境会返回原因。`style` 是启发式建议，不是 CSS 解析器或品牌判定器。
 - 插件不会安装外部 MCP 服务、改变模型权限或替代 DSH 的安全边界。

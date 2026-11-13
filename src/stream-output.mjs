@@ -59,28 +59,63 @@ export function createTailCollector(limit = 64 * 1024) {
   const total = Math.max(1024, limit);
   const headLimit = Math.floor(total / 4);
   const tailLimit = total - headLimit;
-  let head = Buffer.alloc(0);
-  let tail = Buffer.alloc(0);
+  // The head is written once into a fixed buffer; the tail is a ring that only
+  // advances its start pointer, so a steady stream copies each byte once
+  // instead of re-concatenating up to tailLimit bytes per chunk.
+  const head = Buffer.allocUnsafe(headLimit);
+  let headLength = 0;
+  let ring = null;
+  let ringStart = 0;
+  let ringLength = 0;
   let bytes = 0;
+
+  const appendTail = (value) => {
+    const length = value.length;
+    if (!length) return;
+    ring ??= Buffer.allocUnsafe(tailLimit);
+    if (length >= tailLimit) {
+      value.copy(ring, 0, length - tailLimit, length);
+      ringStart = 0;
+      ringLength = tailLimit;
+      return;
+    }
+    let writeAt = ringStart + ringLength;
+    if (writeAt >= tailLimit) writeAt -= tailLimit;
+    const first = Math.min(length, tailLimit - writeAt);
+    value.copy(ring, writeAt, 0, first);
+    if (first < length) value.copy(ring, 0, first, length);
+    ringLength += length;
+    if (ringLength > tailLimit) {
+      ringStart = (ringStart + (ringLength - tailLimit)) % tailLimit;
+      ringLength = tailLimit;
+    }
+  };
+
+  const tailBytes = () => {
+    if (!ringLength) return Buffer.alloc(0);
+    if (ringStart + ringLength <= tailLimit) return ring.subarray(ringStart, ringStart + ringLength);
+    return Buffer.concat([ring.subarray(ringStart, tailLimit), ring.subarray(0, ringStart + ringLength - tailLimit)]);
+  };
+
   return {
     push(chunk) {
       const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       if (!value.length) return;
       bytes += value.length;
-      if (head.length < headLimit) {
-        const take = Math.min(headLimit - head.length, value.length);
-        head = Buffer.concat([head, value.subarray(0, take)]);
-        tail = Buffer.concat([tail, value.subarray(take)]);
-      } else tail = Buffer.concat([tail, value]);
-      if (tail.length > tailLimit) tail = tail.subarray(tail.length - tailLimit);
+      if (headLength < headLimit) {
+        const take = Math.min(headLimit - headLength, value.length);
+        value.copy(head, headLength, 0, take);
+        headLength += take;
+        appendTail(value.subarray(take));
+      } else appendTail(value);
     },
     read() {
       const truncated = bytes > headLimit + tailLimit;
-      const omitted = Math.max(0, bytes - head.length - tail.length);
+      const omitted = Math.max(0, bytes - headLength - ringLength);
       const text = [
-        decodeBytes(head, { trimTail: true }),
+        decodeBytes(head.subarray(0, headLength), { trimTail: true }),
         truncated ? '\n…[truncated: 已省略 ' + omitted + ' 字节，保留开头与末尾]…\n' : '',
-        decodeBytes(tail, { trimLead: true }),
+        decodeBytes(tailBytes(), { trimLead: true }),
       ].join('');
       return { text, truncated, bytes, omitted };
     },

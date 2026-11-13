@@ -1,5 +1,21 @@
 # 更新记录
 
+## 0.4.3-preview.2 — 2026-11-13（内置 Bash 重写 + 全链路性能）
+
+包版本：`0.4.3-preview.2`。工具面、开关与配置字段不变：默认 6 个入口，开启 Shell 后 7 个；本版把内置 Bash 从单行分词器重写为高保真解释器，并完成 P0–P4 五组性能优化。
+
+- **内置 Bash 重写为分层解释器**：`src/builtin-shell.mjs` 只保留薄适配层，执行交给 `src/shell/`：完整脚本词法分析（注释、续行、heredoc、引号、`[[ ]]`）、递归下降语法树、参数/数组/花括号/通配/算术/命令替换展开、执行器（列表、`&&`/`||`、管道、重定向、函数、子 shell、`set -e/-u/-x/-o pipefail`、`trap ... EXIT`）。不再按行切分，多行脚本、函数、`if/for/while/case`、`case ;&/;;&`、`for ((...))`、`while read` 均按 bash 语义执行。
+- **参数与文本语义补齐**：`$?`/`$#`/`$@`/`$*`/`$$`、`${v:-}`/`${v:=}`/`${v:?}`/`${v:+}`、`${#v}`、`${v#pat}`/`${v##pat}`/`${v%pat}`/`${v%%pat}`、`${v:off:len}`（含负偏移）、`${v/pat/rep}`/`${v//pat/rep}`、`${!v}`、`${v^^}`/`${v,,}`、数组 `a=(...)`/`a[1]=`/`a+=(...)`/`${a[i]}`/`${#a[@]}`；赋值先于展开、`$( )` 失败不中止整行、管道阶段子 shell、`local` 可见调用者旧值、`cd -` 打印目录、退出码 127/126 与中文错误提示保持。
+- **48 个 coreutils 与 sed/awk**：新增 `ls/mkdir/rm/mv/cp/touch/ln/chmod/stat/readlink/du/env/uname/df`、`cat/head/tail/wc/cut/tr/tee/nl/tac/paste`、`grep/find/xargs`、`sort/uniq/comm/diff`、`sed`、`awk`；`grep -r/-l/-o/-w/-E`、`find -name/-type/-maxdepth`、`xargs -n/-I/-0`、`sort -k/-t/-u/-r`、`sed -n/-i/-E/s///`、`awk -F/-v/BEGIN/END/数组/函数/getline` 等常用形态可用。内置命令补齐 `printf`（宽度/精度/复用格式/`%q`/`-v`）、`read`（`-r/-p/-n/-N/-d/-a`）、`getopts`、`mapfile/readarray`、`command/type`、`source`、`umask`、`trap` 等。
+- **真 Bash 差分对齐**：新增 `scripts/parity-shell.mjs`，用 Git Bash 5.2.37 作离线 oracle，对 172 个脚本同时比较 stdout 与退出码；当前 **172/172 一致**。它只用于开发期验证，运行时仍使用纯 JS 解释器。
+- **P0 输出预算裁剪（`src/budget.mjs`）**：`fitResult` 改为前缀字节表 + 二分批量裁剪，避免逐项 `JSON.stringify`、`structuredClone` 与每轮 pop。5000 项 / 4000 字符从 **1620.6 ms 降到 2.78 ms（约 583×）**，5000 项 / 24000 字符从 **1486.9 ms 降到 2.85 ms（约 522×）**；同时修正旧实现在 n≥2000 时直接返回最小占位对象、并未真正裁剪的问题。
+- **P1 工作区（`src/workspace.mjs`）**：`_resolve` 按操作记忆化、inventory 改为流式异步生成器、search 提升大小写与 needle 计算并增加整串快路径、`_text` 只做一次 lstat、Git 祖先检测避免多余 spawn。实测 `list` 463→117 ms（3.9×）、`map` 917→200 ms（4.6×）、完整 `search` 1202→286 ms（4.2×）、提前命中 453→7.9 ms（57×）、子目录 72.6→1.6 ms（44×）。
+- **P2 代码工具（`src/code-tools.mjs`）**：imports 用一次构建的解析索引替代 O(n×候选)、注释/字符串遮罩改为单遍、symbols 到上限即 `break`、review 的 inventory 与 checks 并行。CPU 基准 symbols 13.20→0.63 ms（21×）、imports 8.15→1.88 ms（4.3×）、无限制 symbols 26.85→1.84 ms（14.6×）；端到端 review 491.4→374.8 ms（−24%）。
+- **P3 运行时与流（`src/engine.mjs`/`src/stream-output.mjs`/`src/browse.mjs`）**：冻结配置按对象身份缓存，跳过重复 64 KB 知识库 JSON 解析（toolsForConfig 89.86→0.74 µs，约 121×；可变配置仍每次完整校验）；输出尾部收集改为环形缓冲（128 B×4096 从 84.9→0.19 ms，约 447×）；浏览器 `wait` 改为 WaitGate，排在后面的 snapshot/screenshot 约 31 ms 就能打断原需 5 秒的等待。
+- **P4 网页缓存（`src/web-tools.mjs`）**：`open` 增加规范化 URL 缓存（去 utm/fbclid/gclid/spm/ref/source 与 fragment、参数排序、`public|`/`private|` 命名空间、10 分钟 TTL、20 条/16 MiB LRU），`search` 缓存键做 NFKC/空白/大小写/词序归一化但保留引号与搜索操作符。实测 open 20 次 78.8→6.7 ms（11.7×）、search 24 个变体 375.1→16.2 ms（23.2×），失败结果不缓存。
+- **验证**：`node --test` **436 项全部通过**；`node scripts/check.mjs` 与 `node scripts/build-ui.mjs --check` 通过；`scripts/parity-shell.mjs` 172/172；新增预算、工作区、代码工具、运行时、网页缓存与词法/coreutils 测试。
+- **已知边界**：进程替换、关联数组、`select`/`coproc`、作业控制与部分 GNU 扩展仍未实现，完整清单见 `docs/shell-design.md`；`sed`/`awk` 为常用子集。受限令牌下不能把 Git Bash 作为运行时后端，内置解释器仍是 Windows 沙箱内的默认路径。
+
 ## 0.4.3-preview.1 — 2026-11-12（0.4.3 预览版）
 
 包版本：`0.4.3-preview.1`。工具面与开关不变：默认 6 个入口，开启 Shell 后 7 个；本版集中修复“装了插件但 AI 不用”、Shell 绕过沙箱、输出被二次截断、搜索等待过久与提示词常驻开销。

@@ -47,45 +47,71 @@ function fit(result, maxChars) {
 
 // Preserve offsets/newlines while excluding comments and optionally literals.
 // Template interpolations and multiline Python strings are intentionally opaque.
-function mask(source, { strings = true, hash = false } = {}) {
-  const output = [];
-  let quote = '';
-  let triple = false;
-  let comment = '';
-  for (let index = 0; index < source.length; index++) {
+const NON_NEWLINE = /[^\n]/g;
+
+function blank(text) {
+  return text.includes('\n') ? text.replace(NON_NEWLINE, ' ') : ' '.repeat(text.length);
+}
+
+// End offset of a literal that starts at `index`; escapes skip the next character
+// and triple-quoted literals only close on three identical quotes.
+function stringEnd(source, index, quote, triple) {
+  const length = source.length;
+  let cursor = index + (triple ? 3 : 1);
+  while (cursor < length) {
+    const char = source[cursor];
+    if (char === '\\') { cursor += 2; continue; }
+    if (char === quote) {
+      if (!triple) return cursor + 1;
+      if (source[cursor + 1] === quote && source[cursor + 2] === quote) return cursor + 3;
+    }
+    cursor++;
+  }
+  return length;
+}
+
+// One lexical pass yields both views: `clean` keeps literal text with comments
+// blanked, `tokens` blanks literal text too. Callers needing both avoid a
+// second scan of the same source.
+function masks(source, { hash = false } = {}) {
+  const length = source.length;
+  const clean = [];
+  const tokens = [];
+  let runStart = 0;
+  let index = 0;
+  while (index < length) {
     const char = source[index];
     const next = source[index + 1];
-    if (comment) {
-      if ((comment === 'line' && char === '\n') || (comment === 'block' && char === '*' && next === '/')) {
-        if (comment === 'block') { output.push(' ', ' '); index++; } else output.push('\n');
-        comment = '';
-      } else output.push(char === '\n' ? '\n' : ' ');
-    } else if (quote) {
-      if (char === '\\') {
-        output.push(strings ? ' ' : char);
-        if (next !== undefined) { output.push(next === '\n' ? '\n' : strings ? ' ' : next); index++; }
-      } else if (char === quote && (!triple || source.slice(index, index + 3) === quote.repeat(3))) {
-        const length = triple ? 3 : 1;
-        output.push(strings ? ' '.repeat(length) : quote.repeat(length));
-        index += length - 1;
-        quote = '';
-        triple = false;
-      } else output.push(char === '\n' ? '\n' : strings ? ' ' : char);
-    } else if ((char === '/' && next === '/') || (hash && char === '#')) {
-      comment = 'line';
-      output.push(' ');
-      if (char === '/') { output.push(' '); index++; }
+    let end;
+    let plain;
+    let blanked;
+    if ((char === '/' && next === '/') || (hash && char === '#')) {
+      end = source.indexOf('\n', index);
+      if (end === -1) end = length;
+      plain = blanked = ' '.repeat(end - index);
     } else if (char === '/' && next === '*') {
-      comment = 'block'; output.push(' ', ' '); index++;
-    } else if (['"', "'", '`'].includes(char)) {
-      quote = char;
-      triple = hash && source.slice(index, index + 3) === char.repeat(3);
-      const length = triple ? 3 : 1;
-      output.push(strings ? ' '.repeat(length) : char.repeat(length));
-      index += length - 1;
-    } else output.push(char);
+      const close = source.indexOf('*/', index + 2);
+      end = close === -1 ? length : close + 2;
+      plain = blanked = blank(source.slice(index, end));
+    } else if (char === '"' || char === "'" || char === '`') {
+      const triple = hash && source[index + 1] === char && source[index + 2] === char;
+      end = stringEnd(source, index, char, triple);
+      plain = source.slice(index, end);
+      blanked = blank(plain);
+    } else { index++; continue; }
+    if (index > runStart) { const run = source.slice(runStart, index); clean.push(run); tokens.push(run); }
+    clean.push(plain);
+    tokens.push(blanked);
+    index = end;
+    runStart = end;
   }
-  return output.join('');
+  if (runStart < length) { const run = source.slice(runStart); clean.push(run); tokens.push(run); }
+  return { clean: clean.join(''), tokens: tokens.join('') };
+}
+
+function mask(source, { strings = true, hash = false } = {}) {
+  const views = masks(source, { hash });
+  return strings ? views.tokens : views.clean;
 }
 
 async function inventory(workspace, selected, signal) {
@@ -98,9 +124,10 @@ async function inventory(workspace, selected, signal) {
 
 async function sourceFiles(workspace, selected, signal, includeRootInventory = false, limits = CODE_LIMITS.normal) {
   const { reads: MAX_READS, lines: MAX_LINES, chars: MAX_CHARS, files: MAX_SOURCE_FILES } = limits;
-  const map = await inventory(workspace, selected, signal);
+  // The selected subtree and the root inventory are independent listings; overlap them.
+  const [map, rootMap] = await Promise.all([inventory(workspace, selected, signal), includeRootInventory && selected !== '.' ? inventory(workspace, '.', signal) : null]);
   cancelled(signal);
-  const roots = includeRootInventory && selected !== '.' ? await inventory(workspace, '.', signal) : map;
+  const roots = rootMap ?? map;
   const sources = [];
   let reads = 0;
   let lineCount = 0;
@@ -141,36 +168,45 @@ async function sourceFiles(workspace, selected, signal, includeRootInventory = f
   return { sources, inventory: roots.files ?? [], truncated: Boolean(truncated), scannedFiles: sources.length, scannedLines: lineCount, skipped: map.skipped ?? {}, limits };
 }
 
+const DECLARATIONS = Object.freeze([
+  ['function', /\b(?:function\s*\*?\s+|(?:async\s+)?def\s+|fn\s+)([A-Za-z_$][\w$]*)/g],
+  ['function', /^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(/g],
+  ['class', /\bclass\s+([A-Za-z_$][\w$]*)/g],
+  ['interface', /\binterface\s+([A-Za-z_$][\w$]*)/g],
+  ['type', /\b(?:type|enum|struct|trait)\s+([A-Za-z_$][\w$]*)/g],
+  ['function', /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^;]*\)|[A-Za-z_$][\w$]*)\s*=>/g],
+  ['export', /\bexport\s+(?:default\s+)?(?:async\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g],
+  ['method', /^\s*(?!(?:if|for|while|switch|catch|with|return|function|class)\b)(?:(?:async|static|get|set)\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g],
+]);
+
 function symbols(scan, limit, signal) {
   const items = [];
   let more = false;
-  for (const file of scan.sources) {
+  outer: for (const file of scan.sources) {
     const clean = mask(file.source, { hash: /\.(?:py|rb)$/i.test(file.path) });
-    for (const [index, line] of clean.split('\n').entries()) {
+    const lines = clean.split('\n');
+    for (let index = 0; index < lines.length; index++) {
       cancelled(signal);
-      const declarations = [
-        ['function', /\b(?:function\s*\*?\s+|(?:async\s+)?def\s+|fn\s+)([A-Za-z_$][\w$]*)/g],
-        ['function', /^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(/g],
-        ['class', /\bclass\s+([A-Za-z_$][\w$]*)/g],
-        ['interface', /\binterface\s+([A-Za-z_$][\w$]*)/g],
-        ['type', /\b(?:type|enum|struct|trait)\s+([A-Za-z_$][\w$]*)/g],
-        ['function', /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^;]*\)|[A-Za-z_$][\w$]*)\s*=>/g],
-        ['export', /\bexport\s+(?:default\s+)?(?:async\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g],
-        ['method', /^\s*(?!(?:if|for|while|switch|catch|with|return|function|class)\b)(?:(?:async|static|get|set)\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g],
-      ];
+      const line = lines[index];
+      if (line === '') continue;
       const seen = new Set();
-      for (const [kind, regex] of declarations) for (const match of line.matchAll(regex)) {
-        const key = match[1];
-        if (seen.has(key)) continue;
-        seen.add(key);
-        if (items.length >= limit) { more = true; continue; }
-        items.push({ path: file.path, line: index + 1, name: match[1], kind, exported: /\bexport\b/.test(line) });
+      for (const [kind, regex] of DECLARATIONS) {
+        regex.lastIndex = 0;
+        let match;
+        while ((match = regex.exec(line)) !== null) {
+          const name = match[1];
+          if (seen.has(name)) continue;
+          seen.add(name);
+          if (items.length >= limit) { more = true; break outer; }
+          items.push({ path: file.path, line: index + 1, name, kind, exported: /\bexport\b/.test(line) });
+        }
       }
+      if (!line.includes('export')) continue;
       const exports = line.match(/\bexport\s*\{([^}]+)\}/);
       if (exports) for (const entry of exports[1].split(',')) {
         const name = entry.trim().match(/^(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
         if (!name) continue;
-        if (items.length >= limit) { more = true; continue; }
+        if (items.length >= limit) { more = true; break outer; }
         items.push({ path: file.path, line: index + 1, name: name[2] ?? name[1], kind: 'export', exported: true });
       }
     }
@@ -179,43 +215,95 @@ function symbols(scan, limit, signal) {
     note: 'Heuristic declarations, not an AST or reference index; JS/TS plus basic Python/Go/Rust declarations. Comments/literals excluded; multiline, Unicode names and template interpolations may be missed. At most ' + scan.limits.files + ' files, ' + scan.limits.lines + ' lines and ' + scan.limits.reads + ' reads.' };
 }
 
-function resolveImport(from, specifier, inventorySet) {
+const IMPORT_EXTENSIONS = Object.freeze(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs', '.json']);
+const IMPORT_EXTENSION_PATTERN = /(\.[cm]?[jt]sx?|\.json)$/;
+const EXTENSION_RANK = new Map(IMPORT_EXTENSIONS.map((extension, position) => [extension, position]));
+
+// Rank every resolvable base once: exact path, then base+extension in probe
+// order, then base/index+extension. One map lookup replaces the per-specifier
+// candidate array and its repeated inventory probes.
+function resolutionIndex(files) {
+  const index = new Map();
+  const consider = (key, name, rank) => {
+    const current = index.get(key);
+    if (current !== undefined && current.rank <= rank) return;
+    index.set(key, { path: name, rank });
+  };
+  for (const name of files) {
+    consider(name, name, 0);
+    const found = IMPORT_EXTENSION_PATTERN.exec(name);
+    if (!found) continue;
+    const extension = found[1];
+    const rank = EXTENSION_RANK.get(extension);
+    const base = name.slice(0, name.length - extension.length);
+    consider(base, name, 1 + rank);
+    if (base.endsWith('/index')) consider(base.slice(0, -6), name, 1 + IMPORT_EXTENSIONS.length + rank);
+  }
+  return index;
+}
+
+function resolveImport(from, specifier, index, files) {
   const base = path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier));
   if (base === '..' || base.startsWith('../') || path.posix.isAbsolute(base) || /^[a-z]:/i.test(base) || base.includes('\\')) return { to: null, status: 'outside-workspace' };
-  const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs', '.json'];
-  const candidates = [base, ...extensions.map((ext) => base + ext), ...extensions.map((ext) => `${base}/index${ext}`)];
-  if (/\.[cm]?js$/.test(base)) candidates.push(base.replace(/\.[cm]?js$/, '.ts'), base.replace(/\.[cm]?js$/, '.tsx'));
-  const to = candidates.find((candidate) => inventorySet.has(candidate)) ?? null;
+  let to = index.get(base)?.path ?? null;
+  if (to === null && /\.[cm]?js$/.test(base)) {
+    const stem = base.slice(0, base.lastIndexOf('.'));
+    to = files.has(stem + '.ts') ? stem + '.ts' : files.has(stem + '.tsx') ? stem + '.tsx' : null;
+  }
   return { to, status: to ? 'resolved' : 'unresolved' };
 }
+
+const IMPORT_PATTERNS = Object.freeze([
+  /\b(?:import|export)\s+(?:type\s+)?(?:\*\s*(?:as\s+[\w$]+)?|\{[^}]{0,1000}\}|[\w$]+(?:\s*,\s*(?:\*\s+as\s+[\w$]+|\{[^}]{0,1000}\}))?)\s+from\s*(['"])([^'"\r\n]+)\1/g,
+  /\bimport\s*(['"])([^'"\r\n]+)\1/g,
+  /\brequire\s*\(\s*(['"])([^'"\r\n]+)\1\s*\)/g,
+]);
 
 function imports(scan, limit, signal) {
   const edges = [];
   const packages = new Map();
   const files = new Set(scan.inventory);
+  const index = resolutionIndex(scan.inventory);
   let dynamicImports = 0;
   let count = 0;
   let localCount = 0;
   for (const file of scan.sources) {
     if (!SCRIPT_EXTENSIONS.test(file.path)) continue;
-    const clean = mask(file.source, { strings: false });
-    const tokens = mask(file.source);
+    const { clean, tokens } = masks(file.source);
     dynamicImports += (tokens.match(/\b(?:import|require)\s*\(/g) ?? []).length;
     const found = [];
-    for (const regex of [/\b(?:import|export)\s+(?:type\s+)?(?:\*\s*(?:as\s+[\w$]+)?|\{[^}]{0,1000}\}|[\w$]+(?:\s*,\s*(?:\*\s+as\s+[\w$]+|\{[^}]{0,1000}\}))?)\s+from\s*(['"])([^'"\r\n]+)\1/g, /\bimport\s*(['"])([^'"\r\n]+)\1/g, /\brequire\s*\(\s*(['"])([^'"\r\n]+)\1\s*\)/g]) {
-      for (const match of clean.matchAll(regex)) {
+    for (const regex of IMPORT_PATTERNS) {
+      regex.lastIndex = 0;
+      let match;
+      while ((match = regex.exec(clean)) !== null) {
         cancelled(signal);
-        if (!/^(?:import|export|require)\b/.test(tokens.slice(match.index))) continue;
+        // Literal text is blanked in `tokens`, so equal characters mean the
+        // match starts in code rather than inside a string.
+        if (tokens.charCodeAt(match.index) !== clean.charCodeAt(match.index)) continue;
         found.push({ offset: match.index, specifier: match[2], require: match[0].startsWith('require') });
       }
     }
     found.sort((a, b) => a.offset - b.offset);
+    let cursor = 0;
+    let line = 1;
+    const advanceTo = (target) => {
+      while (true) {
+        const newline = clean.indexOf('\n', cursor);
+        if (newline === -1) { cursor = target; return; }
+        if (newline >= target) return;
+        line++;
+        cursor = newline + 1;
+      }
+    };
     for (const entry of found) {
       if (entry.require) dynamicImports--;
       count++;
       if (entry.specifier.startsWith('.')) {
         localCount++;
-        if (edges.length < limit) edges.push({ from: file.path, line: clean.slice(0, entry.offset).split('\n').length, specifier: clipped(entry.specifier), ...resolveImport(file.path, entry.specifier, files) });
+        if (edges.length < limit) {
+          advanceTo(entry.offset);
+          edges.push({ from: file.path, line, specifier: clipped(entry.specifier), ...resolveImport(file.path, entry.specifier, index, files) });
+        }
       } else {
         const dependency = entry.specifier.startsWith('@') ? entry.specifier.split('/').slice(0, 2).join('/') : entry.specifier.startsWith('node:') ? entry.specifier : entry.specifier.split('/')[0];
         packages.set(dependency, (packages.get(dependency) ?? 0) + 1);
@@ -364,7 +452,8 @@ function reviewDiff(diff, limit, signal) {
     const code = raw.slice(1);
     const line = added ? newLine++ : oldLine++;
     file[added ? 'added' : 'removed']++;
-    const patterns = added ? RISKS.filter(([, regex]) => regex.test(code)) : [];
+    const patterns = [];
+    if (added) for (const risk of RISKS) if (risk[1].test(code)) patterns.push(risk);
     if (/^\s*export\b/.test(code)) patterns.push(['public-interface', null, 'Check callers and compatibility for a changed exported interface.']);
     if (/(?:^|\/)(?:package\.json|Cargo\.toml|go\.mod|requirements[^/]*\.txt|pyproject\.toml)$/.test(file.path)) patterns.push(['dependency-manifest', null, 'Check dependency and lockfile consistency, supported versions and install reproducibility.']);
     for (const [kind, , message] of patterns) {
@@ -389,8 +478,8 @@ async function review(workspace, args, signal) {
   const parsed = reviewDiff(diff.diff ?? '', limit, signal);
   if (!diff.available) return { action: 'review', available: false, executed: false, reason: diff.reason, scope: diff.scope, files: [], findings: [] };
   // Discover existing scripts/tests once. Their text is data, never executed.
-  const map = await inventory(workspace, '.', signal);
-  const checks = await workspace.run({ action: 'checks' }, { signal });
+  // Both are independent read-only listings, so overlap their git round trips.
+  const [map, checks] = await Promise.all([inventory(workspace, '.', signal), workspace.run({ action: 'checks' }, { signal })]);
   const suggestedChecks = [];
   for (const pkg of checks.packages ?? []) for (const [name, command] of Object.entries(pkg.scripts ?? {})) {
     if (/^(?:test(?::|$)|lint(?::|$)|typecheck(?::|$)|check(?::|$)|build$)/i.test(name) && suggestedChecks.length < limit) suggestedChecks.push({ package: pkg.path, script: name, command });

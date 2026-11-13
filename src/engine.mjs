@@ -1,5 +1,6 @@
 import { Workspace } from './workspace.mjs';
 import { resolveConfig } from './config.mjs';
+import { parseKnowledgeConfig } from './knowledge-config.mjs';
 import { selectSkills } from './skills.mjs';
 import { POLICY, buildShellRoutePolicy, estimateTokens } from './policy.mjs';
 import { buildEnhancementPolicy, buildUnlimitedPolicy } from './thinking.mjs';
@@ -13,6 +14,52 @@ import { Knowledge, projectKnowledgePolicy } from './knowledge.mjs';
 import { SHELL_TOOL, buildShellPolicy, runShellTool } from './shell-tool.mjs';
 import { validateArguments as validateSchema } from './validation.mjs';
 import { fitResult } from './budget.mjs';
+
+// resolveConfig freezes its result, so a frozen, canonically shaped config is an
+// immutable revision: the expensive part (parsing the knowledge JSON) must not
+// run again for the same object. Mutable or partial inputs still take the full
+// resolveConfig path, so editing an options object is always honored.
+const RESOLVED_KEYS = Object.freeze(Object.keys(resolveConfig({})));
+const OPTIONAL_KEYS = Object.freeze(['brandIntent', 'allowBrandColors']);
+const KNOWN_KEYS = new Set([...RESOLVED_KEYS, ...OPTIONAL_KEYS]);
+const resolvedRevisions = new WeakSet();
+
+function isResolvedRevision(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.isFrozen(value)) return false;
+  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const keys = Object.keys(value);
+  if (keys.length < RESOLVED_KEYS.length || keys.length > KNOWN_KEYS.size) return false;
+  for (const key of keys) if (!KNOWN_KEYS.has(key)) return false;
+  for (const key of RESOLVED_KEYS) if (!Object.hasOwn(value, key)) return false;
+  return true;
+}
+
+// The knowledge JSON is the only expensive check, so it is memoized by string
+// instead of skipped: a config that was not produced by resolveConfig still
+// gets the full validation, but a host that rebuilds the same config every step
+// parses it once. A single entry is enough because the text changes rarely.
+let lastKnowledge = null;
+
+function revalidateRevision(options) {
+  const text = options.knowledgeConfig;
+  if (typeof text === 'string' && text.trim() && text !== lastKnowledge) {
+    parseKnowledgeConfig(text);
+    lastKnowledge = text;
+  }
+  resolveConfig({ ...options, knowledgeConfig: '' });
+}
+
+function configFor(options = {}) {
+  if (isResolvedRevision(options)) {
+    if (resolvedRevisions.has(options)) return options;
+    revalidateRevision(options);
+    resolvedRevisions.add(options);
+    return options;
+  }
+  const config = resolveConfig(options);
+  resolvedRevisions.add(config);
+  return config;
+}
 
 export const BASE_TOOLS = Object.freeze([
   { name: 'strong_skill', description: '按需加载代码技能：query 匹配、id 精确加载、无参数列目录；匹配就先加载。',
@@ -38,7 +85,7 @@ export const TOOLS = Object.freeze([...BASE_TOOLS, ...EXTRA_TOOLS, WEB_TOOL, BRO
 export const ALL_TOOLS = Object.freeze([...TOOLS, SHELL_TOOL]);
 
 export function toolsForConfig(options = {}) {
-  const config = resolveConfig(options);
+  const config = configFor(options);
   if (!config.unlimitedTokens && config.toolSet !== 'expanded') return config.shellTool ? [...BASE_TOOLS, SHELL_TOOL] : BASE_TOOLS;
   const tools = [...BASE_TOOLS, ...EXTRA_TOOLS];
   if (config.webTool) tools.push(WEB_TOOL);
@@ -48,7 +95,7 @@ export function toolsForConfig(options = {}) {
 }
 
 export function buildPolicy(options = {}, context = {}) {
-  const config = resolveConfig(options);
+  const config = configFor(options);
   // Routing for the gated tools, and only for tools this configuration
   // registers: compact sessions get no hint at all, so they stay on POLICY.
   const hints = [];
@@ -82,7 +129,7 @@ export function boundResult(value, maxChars) {
 
 export class StrongEngine {
   constructor(root, options = {}) {
-    this.config = resolveConfig(options);
+    this.config = configFor(options);
     this.workspace = new Workspace(root, this.config);
   }
   async call(name, args = {}, { signal, sandbox = null } = {}) {
@@ -114,7 +161,7 @@ export class StrongEngine {
 }
 
 export function budgetReport(options = {}, context = {}) {
-  const config = resolveConfig(options);
+  const config = configFor(options);
   const toolText = JSON.stringify(toolsForConfig(config));
   const policy = buildPolicy(config, context);
   return { profile: config.profile, toolSet: config.toolSet, residentTools: toolsForConfig(config).length, residentSkillBodies: 0,
