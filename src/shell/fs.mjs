@@ -41,7 +41,9 @@ const DEVICES = new Map([
 ]);
 
 const isWindows = process.platform === 'win32';
-const MAX_READ = 256 * 1024;
+// Coreutils read whole files; 64 MiB matches the external-process output budget
+// while still bounding accidental multi-gigabyte reads in the in-process shell.
+const MAX_READ = 64 * 1024 * 1024;
 
 function toSlash(value) {
   return value.replace(/\\/g, '/');
@@ -105,8 +107,15 @@ export function createFs(options = {}) {
     if (readOnly) throw new ShellError('EROFS', vpath);
   }
 
+  function guardRoot(vpath, action) {
+    if (normalizeVirtual(vpath) === '/') {
+      throw new ShellError('EPERM', '/', 'refusing to ' + action + ' the project root');
+    }
+  }
+
   /** Resolve a user path to {device} or {host, vpath}. Throws on escape. */
-  function resolve(input, cwd = '/') {
+  function resolve(input, cwd = '/', opts = {}) {
+    const followFinal = opts.followFinal !== false;
     let value = String(input ?? '');
     if (!value) throw new ShellError('ENOENT', '');
     value = toSlash(value);
@@ -136,11 +145,39 @@ export function createFs(options = {}) {
     const host = path.join(rootHost, ...segments);
     const vpath = '/' + segments.join('/');
     const real = realOf(host);
-    if (real) {
-      if (!inside(rootReal, real)) throw new ShellError('EOUTSIDE', vpath);
-    } else {
+    let finalLink = false;
+    if (!followFinal) {
+      try { finalLink = fsSync.lstatSync(host).isSymbolicLink(); } catch { finalLink = false; }
+    }
+    // A final link may be exempt from the target check for unlink/rename, but
+    // its containing directory must still be inside the workspace.
+    if (segments.length) {
       const parentReal = realOf(path.dirname(host));
       if (parentReal && !inside(rootReal, parentReal)) throw new ShellError('EOUTSIDE', vpath);
+    }
+    if (real) {
+      // Removing or renaming the final symlink does not follow it, so a link
+      // that points outside the workspace may still be unlinked. Ancestors are
+      // always verified; only the last component may be exempted.
+      if (!finalLink && !inside(rootReal, real)) throw new ShellError('EOUTSIDE', vpath);
+    } else if (!finalLink) {
+      // A dangling final symlink has no realpath; follow the link chain textually
+      // so a write cannot create its target outside the workspace.
+      let cursor = host;
+      let targetPath = '';
+      for (let depth = 0; depth < 40; depth++) {
+        let info;
+        try { info = fsSync.lstatSync(cursor); } catch { break; }
+        if (!info.isSymbolicLink()) { targetPath = cursor; break; }
+        let target;
+        try { target = fsSync.readlinkSync(cursor); } catch { break; }
+        cursor = path.resolve(path.dirname(cursor), target);
+        targetPath = cursor;
+      }
+      const target = targetPath || host;
+      const targetReal = realOf(target);
+      const check = targetReal || target;
+      if (!inside(rootReal, check) && !inside(rootHost, check)) throw new ShellError('EOUTSIDE', vpath);
     }
     return { host, vpath };
   }
@@ -159,7 +196,7 @@ export function createFs(options = {}) {
   }
 
   function lstat(input, cwd) {
-    const entry = resolve(input, cwd);
+    const entry = resolve(input, cwd, { followFinal: false });
     if (entry.device) return { isFile: entry.device !== 'stdout' && entry.device !== 'stderr', isDir: false, isSymlink: false, isDevice: entry.device, size: 0, mtimeMs: 0, mode: 0o666 };
     try {
       const info = fsSync.lstatSync(entry.host);
@@ -251,8 +288,9 @@ export function createFs(options = {}) {
   }
 
   function remove(input, cwd, opts = {}) {
-    const entry = resolve(input, cwd);
+    const entry = resolve(input, cwd, { followFinal: false });
     assertWritable(entry.vpath);
+    guardRoot(entry.vpath, 'remove');
     const info = (() => { try { return fsSync.lstatSync(entry.host); } catch { return null; } })();
     if (!info) {
       if (opts.force) return false;
@@ -269,8 +307,9 @@ export function createFs(options = {}) {
   }
 
   function rmdir(input, cwd) {
-    const entry = resolve(input, cwd);
+    const entry = resolve(input, cwd, { followFinal: false });
     assertWritable(entry.vpath);
+    guardRoot(entry.vpath, 'remove');
     try { fsSync.rmdirSync(entry.host); }
     catch (error) {
       const code = error.code === 'ENOENT' ? 'ENOENT' : error.code === 'ENOTEMPTY' ? 'ENOTEMPTY' : error.code === 'ENOTDIR' ? 'ENOTDIR' : 'EACCES';
@@ -279,13 +318,19 @@ export function createFs(options = {}) {
   }
 
   function rename(from, to, cwd) {
-    const a = target(from, cwd);
-    const b = resolve(to, cwd);
-    if (b.device) throw new ShellError('EINVAL', b.vpath);
+    const a = resolve(from, cwd, { followFinal: false });
+    const b = resolve(to, cwd, { followFinal: false });
+    if (a.device || b.device) throw new ShellError('EINVAL', b.vpath);
     assertWritable(a.vpath);
     assertWritable(b.vpath);
+    guardRoot(a.vpath, 'rename');
+    guardRoot(b.vpath, 'replace');
     try { fsSync.renameSync(a.host, b.host); }
-    catch (error) { throw new ShellError(error.code === 'ENOENT' ? 'ENOENT' : 'EXDEV', a.vpath); }
+    catch (error) {
+      const known = ['ENOENT', 'EEXIST', 'EACCES', 'EPERM', 'EXDEV', 'ENOTDIR', 'EISDIR', 'EINVAL'];
+      const code = known.includes(error.code) ? error.code : 'EINVAL';
+      throw new ShellError(code, a.vpath);
+    }
   }
 
   function copy(from, to, cwd, opts = {}) {
@@ -293,6 +338,7 @@ export function createFs(options = {}) {
     const b = resolve(to, cwd);
     if (b.device) return;
     assertWritable(b.vpath);
+    guardRoot(b.vpath, 'copy to');
     const info = (() => { try { return fsSync.statSync(a.host); } catch { return null; } })();
     if (!info) throw new ShellError('ENOENT', a.vpath);
     try {
@@ -305,6 +351,7 @@ export function createFs(options = {}) {
   function chmod(input, cwd, mode) {
     const entry = resolve(input, cwd);
     assertWritable(entry.vpath);
+    guardRoot(entry.vpath, 'chmod');
     try { fsSync.chmodSync(entry.host, mode); }
     catch { throw new ShellError('EPERM', entry.vpath); }
   }
@@ -363,7 +410,7 @@ export function createFs(options = {}) {
         if (segment === '**' && globstar) {
           const base = node.vpath;
           next.push({ vpath: base });
-          for (const entry of walk(base === '/' ? '' : base, '/')) {
+          for (const entry of walk(base, '/')) {
             if (entry.isDir) next.push({ vpath: entry.vpath });
           }
           continue;
@@ -409,6 +456,7 @@ export function createFs(options = {}) {
     vpath: (input, cwd) => resolve(input, cwd).vpath,
     stat, lstat, exists, readdir, readBuffer, readText, writeText,
     mkdirp, remove, rmdir, rename, copy, chmod, realpath, walk, glob, sizeOf, deviceFor,
+    assertWritable: (input, cwd) => { const entry = resolve(input, cwd); assertWritable(entry.vpath); guardRoot(entry.vpath, 'modify'); return entry; },
     isDevice: (input, cwd) => Boolean(resolve(input, cwd).device),
     tempDir: () => os.tmpdir(),
   };

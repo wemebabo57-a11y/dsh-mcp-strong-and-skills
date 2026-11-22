@@ -9,7 +9,7 @@ agent actually writes. Reference oracle: `C:\\Program Files\\Git\\bin\\bash.exe`
 (5.2.37), used offline to generate golden outputs. It cannot be used at runtime
 inside a confined token, so the interpreter must be ours.
 
-Non-goals: job control beyond `&`, `$!` semantics for builtins, full `[[ ]]`
+Non-goals: job control (`&` rejected), `$!` semantics for builtins, full `[[ ]]`
 regex engines, coprocesses, process substitution beyond `<(...)`.
 
 ## Module layout
@@ -152,7 +152,7 @@ The interpreter is implemented by these modules, all synchronous except `exec.mj
 
 Fidelity is checked by `node scripts/parity-shell.mjs`, which runs 172 scripts through both this
 interpreter and Git Bash 5.2.37 and compares stdout and exit status. Current result: 172/172.
-`node --test` covers the interpreter and every coreutil module (436 tests at the time of writing).
+`node --test` covers the interpreter and every coreutil module (441 tests at the time of writing).
 
 Known gaps, intentionally outside the current contract:
 

@@ -11,7 +11,7 @@ const VIEWPORT = { width: 1280, height: 900 };
 
 export const BROWSE_TOOL = Object.freeze({
   name: 'strong_browse',
-  description: '后台无窗口的真实 Chrome/Edge 浏览器：open、snapshot 读正文、screenshot 截图（视觉模型可直接看）、click/type/press、scroll、wait、close。文本模型改用 strong_web。',
+  description: '无窗口真实 Chrome/Edge：open、snapshot、screenshot、click/type/press、scroll、wait、close；文本模型用 strong_web。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -83,6 +83,7 @@ export const WAIT_SHORTCUTS = Object.freeze(['snapshot', 'screenshot']);
 export class WaitGate {
   constructor() {
     this.pending = null;
+    this.revision = 0;
   }
 
   get active() {
@@ -92,6 +93,7 @@ export class WaitGate {
   wake() {
     const waiter = this.pending;
     if (!waiter) return false;
+    this.revision += 1;
     waiter.finish(true);
     return true;
   }
@@ -101,6 +103,7 @@ export class WaitGate {
     if (signal?.aborted) return Promise.reject(abortReason(signal));
     if (!requested) return Promise.resolve({ waitedMs: 0, interrupted: false });
     this.wake();
+    const seen = this.revision;
     const started = Date.now();
     return new Promise((resolve, reject) => {
       let onAbort = null;
@@ -120,6 +123,7 @@ export class WaitGate {
       waiter.timer = setTimeout(() => waiter.finish(false), requested);
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) waiter.finish(false, abortReason(signal));
+      else if (this.revision !== seen) waiter.finish(true);
     });
   }
 }

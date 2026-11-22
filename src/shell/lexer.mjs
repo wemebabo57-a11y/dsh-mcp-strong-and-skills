@@ -584,7 +584,7 @@ class Lexer {
       const close = this.src.indexOf(']', this.i + 1);
       if (close > this.i) {
         const inside = this.src.slice(this.i + 1, close).trim();
-        if (/^[0-9]+$/.test(inside)) { index = Number(inside); this.i = close + 1; }
+        if (/^-?[0-9]+$/.test(inside)) { index = Number(inside); this.i = close + 1; }
         else if (inside === '@' || inside === '*') { index = inside; this.i = close + 1; }
       }
     }
@@ -662,6 +662,13 @@ class Lexer {
         this.i += 1;
       }
       finish(name, special, len, op, first.parts, null, quote, replacement);
+      return;
+    }
+    if (operator === '@' && /[QELUu]/.test(next || '')) {
+      this.i += 2;
+      if (this.src[this.i] !== '}') throw new Error('bad substitution: ' + this.src.slice(this.i));
+      this.i += 1;
+      push({ t: 'param', name, special, braced: true, len, op: '@' + next, arg: null, slice: null, q: quote });
       return;
     }
     throw new Error('bad substitution: ' + this.src.slice(this.i));

@@ -112,6 +112,10 @@ export function createTailCollector(limit = 64 * 1024) {
     read() {
       const truncated = bytes > headLimit + tailLimit;
       const omitted = Math.max(0, bytes - headLength - ringLength);
+      if (!truncated) {
+        const whole = Buffer.concat([head.subarray(0, headLength), tailBytes()]);
+        return { text: decodeBytes(whole), truncated: false, bytes, omitted: 0 };
+      }
       const text = [
         decodeBytes(head.subarray(0, headLength), { trimTail: true }),
         truncated ? '\n…[truncated: 已省略 ' + omitted + ' 字节，保留开头与末尾]…\n' : '',

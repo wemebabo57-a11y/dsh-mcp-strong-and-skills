@@ -4,10 +4,10 @@ import { validateArguments as validateSchema } from './validation.mjs';
 import { fitResult } from './budget.mjs';
 
 export const EXTRA_TOOLS = Object.freeze([
-  { name: 'strong_code', description: '只读代码定位：symbols 声明；imports 静态 JS/TS 导入图；diagnostics 解析 text 中的报错并安全补充源码。启发式，有扫描上限。', inputSchema: { type: 'object', properties: {
+  { name: 'strong_code', description: '只读代码定位：symbols 声明、imports 导入图、diagnostics 报错并补源码；启发式且有上限。', inputSchema: { type: 'object', properties: {
     action: { type: 'string', enum: ['symbols', 'imports', 'diagnostics'] }, path: { type: 'string', maxLength: 1000 }, text: { type: 'string', maxLength: 5000 }, limit: { type: 'integer', minimum: 1, maximum: 500, description: '普通模式最多 80；无限 token 模式最多 500' },
   }, required: ['action'], additionalProperties: false } },
-  { name: 'strong_review', description: '只读审查实际 diff：变更文件、风险位置、相关测试及已有验证脚本。仅建议，不运行命令。', inputSchema: { type: 'object', properties: {
+  { name: 'strong_review', description: '只读审查 diff：变更文件、风险位置、相关测试与验证脚本；仅建议。', inputSchema: { type: 'object', properties: {
     path: { type: 'string', maxLength: 1000 }, limit: { type: 'integer', minimum: 1, maximum: 500, description: '普通模式最多 80；无限 token 模式最多 500' },
     scope: { type: 'string', enum: ['unstaged', 'staged', 'all'] },
   }, additionalProperties: false } },

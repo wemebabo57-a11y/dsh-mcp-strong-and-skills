@@ -323,7 +323,7 @@ test('find diagnostics', () => {
   check(['find', 'missing'], { code: 1, err: "find: 'missing': No such file or directory\n" });
   check(['find', '.', 'missing', '-name', '*.txt'], { code: 1, out: FIND_TXT, err: "find: 'missing': No such file or directory\n" });
   check(['find', '.', '-bogus'], { code: 1, err: 'find: unknown predicate ' + TICK + "-bogus'\n" });
-  check(['find', '.', '-exec', 'echo', ';'], { code: 1, err: 'find: unknown predicate ' + TICK + "-exec'\n" });
+  check(['find', '.', '-exec', 'echo', ';'], { code: 1, err: 'find: ' + TICK + "-exec' is not supported by the built-in find\n" });
   check(['find', '.', '-name'], { code: 1, err: 'find: missing argument to ' + TICK + "-name'\n" });
   check(['find', '.', '-maxdepth'], { code: 1, err: 'find: missing argument to ' + TICK + "-maxdepth'\n" });
   check(['find', '.', '-name', '*.txt', 'foo'], { code: 1, err: 'find: paths must precede expression: ' + TICK + "foo'\n" });

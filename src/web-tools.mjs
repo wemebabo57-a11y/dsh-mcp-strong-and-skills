@@ -29,7 +29,7 @@ export const WEB_OPEN_CACHE_BYTES = OPEN_CACHE_BYTES;
 
 export const WEB_TOOL = Object.freeze({
   name: 'strong_web',
-  description: '联网查资料，不启动浏览器：search 返回结果列表（id、标题、网址、摘要）；open 用 id 或网址读正文。',
+  description: '联网搜索与抓正文，不启动浏览器；search 返回 id/标题/网址/摘要，open 按 id 或网址读取。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -459,6 +459,7 @@ function dedupe(items) {
 async function search(query, limit, signal, { root = '', allowPrivate = false } = {}) {
   const trimmed = String(query ?? '').trim();
   if (!trimmed) throw new WorkspaceError('INVALID_ARGUMENTS', 'search 需要 query。');
+  signal?.throwIfAborted?.();
   const cached = recallSearch(root, trimmed);
   if (cached) return cached.slice(0, limit);
   const { results: raw, errors, timedOut } = await raceEngines(SEARCH_ENGINES, trimmed, { signal, allowPrivate });

@@ -10,6 +10,7 @@
 // interesting cases; docs/shell-design.md documents the ctx contract.
 import { ShellError, ERRNO_TEXT } from '../fs.mjs';
 import { formatError, splitLines, toInt } from '../io.mjs';
+import { assertSafeRegex } from '../regex-safety.mjs';
 
 export const names = ['grep', 'find', 'xargs'];
 
@@ -522,6 +523,7 @@ function buildGrepRegex(patterns, opts) {
     let source = patterns.map(pattern => translateRegex(pattern, opts.mode)).join('|');
     if (opts.word) source = '(?<![0-9A-Za-z_])(?:' + source + ')(?![0-9A-Za-z_])';
     if (opts.line) source = '^(?:' + source + ')$';
+    assertSafeRegex(source);
     return { regex: new RegExp(source, opts.ignoreCase ? 'gi' : 'g') };
   } catch (error) {
     return { error: regexErrorMessage(error) };
@@ -630,7 +632,7 @@ function runGrep(args, ctx) {
       else buffer = Buffer.from(typeof input === 'string' ? input : input == null ? '' : String(input), 'utf8');
     } else {
       try {
-        buffer = fs.readBuffer(target.vpath, '/', { maxBytes: Infinity });
+        buffer = fs.readBuffer(target.vpath, '/');
       } catch (error) {
         reportFileError(target.display, error instanceof ShellError ? error.code : 'EINVAL');
         return null;
@@ -743,10 +745,10 @@ function runGrep(args, ctx) {
       return null;
     }
     for (const entry of entries) {
+      if (entry.name === '.git') continue;
       const childVpath = joinVirtualPath(vpath, entry.name);
       const childDisplay = joinDisplayPath(display, entry.name);
       if (entry.isDir) {
-        if (entry.name === '.git') continue;
         if (matchesAnyGlob(opts.excludeDir, entry.name)) continue;
         const stop = walkDir(childVpath, childDisplay);
         if (stop) return stop;
@@ -990,7 +992,7 @@ function parseFindPrimary(tokens, state) {
     return { type: 'test', test: entry => entry.mtimeMs > threshold };
   }
   if (token === '-exec' || token === '-execdir' || token === '-ok' || token === '-okdir') {
-    throw new FindParseError('find: unknown predicate ' + findQuoted(token));
+    throw new FindParseError('find: ' + findQuoted(token) + ' is not supported by the built-in find');
   }
   if (typeof token === 'string' && token.startsWith('-')) {
     throw new FindParseError('find: unknown predicate ' + findQuoted(token));

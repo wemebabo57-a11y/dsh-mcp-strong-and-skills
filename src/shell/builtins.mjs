@@ -509,8 +509,6 @@ export function createBuiltins(shell) {
       if (value !== undefined) {
         if (mode.integer) scope.setVar(name, String(Number(value) || 0));
         else scope.setVar(name, value);
-      } else if (scope.getVar(name) === undefined) {
-        scope.setVar(name, '');
       }
       if (mode.export) scope.exported.add(name);
       if (mode.readonly) scope.readonly.add(name);
@@ -754,8 +752,17 @@ export function createBuiltins(shell) {
       else if (flag === '-p') continue;
     }
     if (which) {
-      for (const name of words) io.write(name + '\n');
-      return words.length ? 0 : 1;
+      let status = 0;
+      for (const name of words) {
+        if (scope.funcs.has(name) || builtins.has(name) || (shell.coreutils && shell.coreutils.has(name))) {
+          io.write(name + '\n');
+          continue;
+        }
+        const external = shell.resolve ? shell.resolve(name) : null;
+        if (external) { io.write(external.file + '\n'); continue; }
+        status = 1;
+      }
+      return words.length ? status : 1;
     }
     if (!words.length) return 0;
     const program = words[0];
@@ -765,14 +772,14 @@ export function createBuiltins(shell) {
     }
     const registry = shell.coreutils;
     if (registry && registry.has(program)) {
-      const result = registry.get(program)(program, words.slice(1), shell.coreutilsContext(scope, io));
+      const result = registry.get(program)(program, words.slice(), shell.coreutilsContext(scope, io));
       if (result && result.out) io.write(result.out);
       if (result && result.err) io.error(result.err);
       return result && typeof result.code === 'number' ? result.code : 0;
     }
     const resolved = shell.resolve ? shell.resolve(program) : null;
     if (!resolved) { io.error(program + ': command not found\n'); return 127; }
-    const result = shell.execSync(words, io.stdinText);
+    const result = await shell.execExternal(words, io.stdinText);
     io.write(result.stdout);
     io.error(result.stderr);
     return result.code;
@@ -794,7 +801,7 @@ export function createBuiltins(shell) {
       if (scope.funcs.has(name)) { io.write(short ? 'function\n' : name + ' is a function\n'); continue; }
       if (builtins.has(name)) { io.write(short ? 'builtin\n' : name + ' is a shell builtin\n'); continue; }
       const external = shell.resolve ? shell.resolve(name) : null;
-      if (external) { io.write(short ? 'file\n' : name + ' is ' + (shell.fs.vpath ? name : name) + '\n'); continue; }
+      if (external) { io.write(short ? 'file\n' : name + ' is ' + external.file + '\n'); continue; }
       io.error('type: ' + name + ': not found\n');
       status = 1;
     }
@@ -953,8 +960,13 @@ export function createBuiltins(shell) {
   define(['pushd'], (scope, args, io) => {
     if (!args.length) return 0;
     scope.dirstack = scope.dirstack || [];
+    let target;
+    try { target = scope.fs.vpath(args[0], scope.cwd); } catch { io.error('pushd: ' + args[0] + ': No such file or directory\n'); return 1; }
+    let info;
+    try { info = scope.fs.stat(target, '/'); } catch { io.error('pushd: ' + args[0] + ': No such file or directory\n'); return 1; }
+    if (!info.isDir) { io.error('pushd: ' + args[0] + ': Not a directory\n'); return 1; }
     scope.dirstack.push(scope.cwd);
-    try { scope.cwd = scope.fs.vpath(args[0], scope.cwd); } catch { io.error('pushd: ' + args[0] + ': No such file or directory\n'); return 1; }
+    scope.cwd = target;
     return 0;
   });
   define(['popd'], (scope, args, io) => {
@@ -967,7 +979,7 @@ export function createBuiltins(shell) {
   define(['getconf'], () => 0);
   define(['exec'], async (scope, args, io) => {
     if (!args.length) return 0;
-    const result = shell.execSync(args, io.stdinText);
+    const result = await shell.execExternal(args, io.stdinText);
     io.write(result.stdout);
     io.error(result.stderr);
     throw new ShellExit(result.code);

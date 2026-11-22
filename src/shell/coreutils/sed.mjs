@@ -88,6 +88,7 @@
 
 import { ERRNO_TEXT, ShellError } from '../fs.mjs';
 import { fail, writeOut } from '../io.mjs';
+import { assertSafeRegex } from '../regex-safety.mjs';
 
 export const names = ['sed'];
 
@@ -389,6 +390,7 @@ function compileRegex(source, options) {
   const body = translateRegex(source, options);
   const flags = 'gs' + (options && options.ignoreCase ? 'i' : '');
   try {
+    assertSafeRegex(body);
     return new RegExp(body, flags);
   } catch (error) {
     throw new ScriptFailure('invalid regular expression: ' +
@@ -1110,7 +1112,7 @@ export function main(prog, argv, ctx) {
     if (script.kind === 'f') {
       let content;
       try {
-        content = ctx.fs.readText(script.text, ctx.cwd, { maxBytes: Infinity });
+        content = ctx.fs.readText(script.text, ctx.cwd);
       } catch (error) {
         const code = error instanceof ShellError ? error.code : 'EINVAL';
         return fail(prog, "couldn't open file " + script.text + ': ' +
@@ -1147,7 +1149,7 @@ export function main(prog, argv, ctx) {
       return;
     }
     try {
-      const raw = ctx.fs.readText(path, ctx.cwd, { maxBytes: Infinity });
+      const raw = ctx.fs.readText(path, ctx.cwd);
       inputs.push({ path, raw, lines: splitRecords(raw), failed: false });
     } catch (error) {
       const code = error instanceof ShellError ? error.code : 'EINVAL';
@@ -1463,7 +1465,7 @@ export function main(prog, argv, ctx) {
           return ACTION_DELETE;
         case 'r':
           try {
-            const content = ctx.fs.readText(cmd.file, ctx.cwd, { maxBytes: Infinity });
+            const content = ctx.fs.readText(cmd.file, ctx.cwd);
             for (const line of splitRecords(content)) st.queue.push(line.text);
           } catch {
             // GNU sed silently ignores unreadable r files
@@ -1593,6 +1595,7 @@ export function main(prog, argv, ctx) {
   };
 
   let halted = false;
+  let quitEarly = false;
 
   const runCycle = () => {
     const action = runLine();
@@ -1613,6 +1616,7 @@ export function main(prog, argv, ctx) {
     }
     if (action === ACTION_QUIT || action === ACTION_QUIT_NOW) {
       halted = true;
+      quitEarly = true;
     }
   };
 
@@ -1622,6 +1626,7 @@ export function main(prog, argv, ctx) {
       resetRanges();
       st.fileDone = false;
       halted = false;
+      quitEarly = false;
       if (opts.inPlace !== null) st.out = '';
       while (!halted && !st.fileDone) {
         if (!stepWithinFile()) break;
@@ -1629,6 +1634,7 @@ export function main(prog, argv, ctx) {
         runCycle();
       }
       finishFile(inputs[cursorFile]);
+      if (quitEarly) break;
     }
   } else {
     cursorFile = 0;

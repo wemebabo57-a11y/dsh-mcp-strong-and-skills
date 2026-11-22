@@ -11,13 +11,17 @@ export function usageError(prog, message) {
 }
 
 /** Parse short/long options. defs maps both short chars and long names to 'bool'|'value'. */
-export function parseOptions(argv, defs) {
+export function parseOptions(argv, defs, { stopAtOperand = false } = {}) {
   const opts = new Map();
   const args = [];
   let stop = false;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
-    if (stop || token === '-' || !token.startsWith('-')) { args.push(token); continue; }
+    if (stop || token === '-' || !token.startsWith('-')) {
+      if (stopAtOperand) { args.push(...argv.slice(i)); break; }
+      args.push(token);
+      continue;
+    }
     if (token === '--') { stop = true; continue; }
     if (token.startsWith('--')) {
       const eq = token.indexOf('=');

@@ -106,10 +106,33 @@ async function expandTilde(parts, scope) {
 }
 
 async function expandBracedArg(parts, scope) {
-  return expandPattern({ parts }, scope);
+  // Parameter patterns are patterns even when the expansion sits inside
+  // double quotes: the outer quotes do not literalize `*` or `?`.
+  const patternParts = parts.map((part) => (part.q === 0 || part.t !== 'lit' ? part : { ...part, q: 0 }));
+  return expandPattern({ parts: patternParts }, scope);
+}
+
+function substitutionFileTarget(ast) {
+  if (!Array.isArray(ast) || ast.length !== 1) return null;
+  const list = ast[0];
+  if (!list || list.k !== 'list' || !Array.isArray(list.items) || list.items.length !== 1) return null;
+  const simple = list.items[0] && list.items[0].node;
+  if (!simple || simple.k !== 'simple') return null;
+  if ((simple.words || []).length || (simple.assigns || []).length) return null;
+  const redirs = simple.redirs || [];
+  if (redirs.length !== 1) return null;
+  const redir = redirs[0];
+  if (redir.op !== '<' || (redir.fd !== null && redir.fd !== 0)) return null;
+  return redir.target || null;
 }
 
 export async function expandSubstitution(part, scope) {
+  const fileWord = substitutionFileTarget(part.ast);
+  if (fileWord) {
+    const file = await expandSingle(fileWord, scope);
+    const text = scope.fs.readText(file, scope.cwd);
+    return String(text === undefined || text === null ? '' : text).replace(/\n+$/, '');
+  }
   const text = await scope.shell.runSubstitution(part.ast, scope);
   return String(text === undefined || text === null ? '' : text).replace(/\n+$/, '');
 }
@@ -166,7 +189,9 @@ export async function parameterValue(part, scope) {
       }
       raw = items.join(' ');
     } else {
-      raw = raw[Number(index)];
+      let position = Number(index);
+      if (position < 0) position = raw.length + position;
+      raw = raw[position];
     }
   }
   let unset = raw === undefined;
@@ -213,6 +238,16 @@ export async function parameterValue(part, scope) {
     if (missing) return '';
     return part.arg ? await expandBracedArg(part.arg, scope) : '';
   }
+  if (op && op[0] === '@') {
+    const code = op[1];
+    if (code === 'Q') return "'" + value.split("'").join("'\\''") + "'";
+    if (code === 'E') return value.replace(/\\([abefnrtv\\'])/g, (match, ch) => ({ a: '\x07', b: '\b', e: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'" })[ch] || match);
+    if (code === 'U') return value.toUpperCase();
+    if (code === 'u') return value.charAt(0).toUpperCase() + value.slice(1);
+    if (code === 'L') return value.toLowerCase();
+    return value;
+  }
+
   if (op === '^' || op === '^^' || op === ',' || op === ',,') {
     if (op === '^^') return value.toUpperCase();
     if (op === ',,') return value.toLowerCase();
@@ -419,8 +454,11 @@ function sequenceAlternatives(atoms) {
     let step = match[3] === undefined ? (to >= from ? 1 : -1) : Number(match[3]);
     if (!step) return null;
     const seq = [];
+    const width = Math.max(match[1].replace(/^-/, '').length, match[2].replace(/^-/, '').length);
+    const pad = /^-?0\d/.test(match[1]) || /^-?0\d/.test(match[2]);
     for (let value = from; step > 0 ? value <= to : value >= to; value += step) {
-      seq.push(String(value));
+      const raw = String(Math.abs(value)).padStart(pad ? width : 0, '0');
+      seq.push((value < 0 ? '-' : '') + raw);
       if (seq.length > 10000) return null;
     }
     return seq.map((item) => Array.from(item).map((ch) => ({ ch })));
@@ -495,33 +533,62 @@ async function expandWordCore(parts, scope, options = {}) {
   let started = false;
   let globEligible = false;
   let anyQuoted = false;
+  let pendingSep = false;
+  let wordHasContent = false;
 
   const flush = () => {
-    if (started) { fields.push(cur); cur = ''; started = false; }
+    if (started) { fields.push(cur); cur = ''; started = false; wordHasContent = true; }
   };
 
   const feedLiteral = (text, quoted) => {
+    pendingSep = false;
     cur += text;
     if (text.length) started = true;
     else if (quoted) started = true;
+    if (started) wordHasContent = true;
     if (!quoted && MAGIC.test(text)) globEligible = true;
     if (quoted) anyQuoted = true;
+  };
+
+  const feedSplitItems = (items) => {
+    // Each array/positional element starts a new field, but the final element
+    // stays open so a suffix literal attaches to it (bash: pre${a[@]}post).
+    let first = true;
+    for (const item of items) {
+      if (!first) flush();
+      feedSplitText(item);
+      first = false;
+    }
+    pendingSep = false;
   };
 
   const feedSplitText = (text) => {
     let i = 0;
     const n = text.length;
     while (i < n) {
-      if (isSep(text[i], ifs)) {
-        flush();
+      const ch = text[i];
+      if (isSep(ch, ifs)) {
+        const ifsWhitespace = ch === ' ' || ch === '\t' || ch === '\n';
+        if (ifsWhitespace) {
+          flush();
+          pendingSep = false;
+          i++;
+          continue;
+        }
+        if (started) { flush(); pendingSep = true; }
+        else if (pendingSep || !wordHasContent) { fields.push(''); pendingSep = true; wordHasContent = true; }
+        else pendingSep = true;
         i++;
+        while (i < n && isSep(text[i], ifs) && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n')) i++;
         continue;
       }
       let j = i;
       while (j < n && !isSep(text[j], ifs)) j++;
       const chunk = text.slice(i, j);
+      pendingSep = false;
       cur += chunk;
       started = true;
+      wordHasContent = true;
       if (MAGIC.test(chunk)) globEligible = true;
       i = j;
     }
@@ -539,10 +606,22 @@ async function expandWordCore(parts, scope, options = {}) {
         continue;
       }
       if (!items.length) continue;
+      if (!quoted && !options.noSplit) { feedSplitItems(items); continue; }
       cur += items[0];
       started = true;
       for (let k = 1; k < items.length; k++) { fields.push(cur); cur = items[k]; started = true; }
-      if (quoted) anyQuoted = true;
+      anyQuoted = true;
+      continue;
+    }
+    if (part.t === 'param' && part.index === '@' && !part.len && !part.op) {
+      const items = await parameterValue(part, scope);
+      const values = Array.isArray(items) ? items : (items === '' ? [] : [items]);
+      if (!values.length) continue;
+      if (part.q === 0 && !options.noSplit) { feedSplitItems(values); continue; }
+      cur += values[0];
+      started = true;
+      for (let k = 1; k < values.length; k++) { fields.push(cur); cur = values[k]; started = true; }
+      anyQuoted = true;
       continue;
     }
     let text;
@@ -573,6 +652,8 @@ async function expandWordCore(parts, scope, options = {}) {
     try { matches = scope.fs.glob(field, scope.cwd, { globstar: !!(scope.opts && scope.opts.globstar) }); }
     catch { matches = []; }
     if (matches.length) nextFields.push.apply(nextFields, matches);
+    else if (scope.opts && scope.opts.nullglob) continue;
+    else if (scope.opts && scope.opts.failglob) throw new Error('no match: ' + field);
     else nextFields.push(field);
   }
   return nextFields;

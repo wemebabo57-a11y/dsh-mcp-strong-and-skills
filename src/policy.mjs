@@ -8,7 +8,7 @@ export const POLICY = `工具选择：本插件工具优先。技能先用 stron
 // Placed immediately before the descriptive shell block so the routing rule is
 // read first and "does not replace the DSH default shell" cannot be mistaken
 // for "the host shell tool is still an option".
-export const SHELL_ROUTE = '用户已启用此 Shell：所有 shell 命令（包括宿主 run_code 里的 shell）直接用 strong_shell 执行（更快、返回结构化结果），不要改用宿主原生 bash/pwsh，也不要问用户用哪个；strong_shell 报错时按提示调整，仍失败再让用户处理。';
+export const SHELL_ROUTE = '已启用此 Shell：所有 shell 命令（含 run_code 内）直接用 strong_shell 执行，不要改用宿主原生 bash/pwsh，也不要问用户用哪个；strong_shell 报错时按提示调整，仍失败再交用户。';
 
 /** Only advertise the shell when the setting is on. */
 export function buildShellRoutePolicy(config = {}) {

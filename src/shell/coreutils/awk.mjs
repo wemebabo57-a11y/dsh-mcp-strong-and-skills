@@ -18,6 +18,7 @@
 // length()/substr() count UTF-16 code units rather than bytes.
 
 import { ShellError, ERRNO_TEXT } from '../fs.mjs';
+import { assertSafeRegex } from '../regex-safety.mjs';
 
 export const names = ['awk'];
 
@@ -782,6 +783,7 @@ function ereToJs(pattern) {
 
 function compileEre(pattern) {
   try {
+    assertSafeRegex(ereToJs(pattern));
     return new RegExp(ereToJs(pattern));
   } catch (error) {
     throw new AwkError('invalid regular expression: ' + pattern);
@@ -790,6 +792,7 @@ function compileEre(pattern) {
 
 function compileEreGlobal(pattern) {
   try {
+    assertSafeRegex(ereToJs(pattern));
     return new RegExp(ereToJs(pattern), 'g');
   } catch (error) {
     throw new AwkError('invalid regular expression: ' + pattern);

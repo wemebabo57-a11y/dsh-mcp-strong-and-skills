@@ -1,6 +1,7 @@
 // Command execution: AST evaluation, redirections, pipelines, functions,
 // builtins, coreutils and external processes.
 import { spawn, spawnSync } from 'node:child_process';
+import { safeEnv } from '../safe-env.mjs';
 import fsNode from 'node:fs';
 import pathNode from 'node:path';
 import processNode from 'node:process';
@@ -24,11 +25,7 @@ const DEFAULT_PATH = '/usr/local/bin:/usr/bin:/bin';
 function now() { return Date.now(); }
 
 function envObject() {
-  const out = {};
-  try {
-    for (const key of Object.keys(processNode.env)) out[key] = processNode.env[key];
-  } catch { /* ignore */ }
-  return out;
+  return safeEnv();
 }
 
 export function cloneScope(scope) {
@@ -123,7 +120,7 @@ export function createScope(options) {
     defineLocal(name, value) {
       if (!this.frames.length) return false;
       const frame = this.frames[this.frames.length - 1];
-      frame.set(name, value === undefined ? '' : String(value));
+      frame.set(name, value === undefined ? undefined : String(value));
       return true;
     },
     setPositional(args) { this.positional = args.slice(); },
@@ -133,7 +130,7 @@ export function createScope(options) {
 }
 
 function exportEnv(scope) {
-  const env = envObject();
+  const env = {};
   for (const name of scope.exported) {
     const value = scope.vars.get(name);
     if (value !== undefined) env[name] = String(value);
@@ -280,6 +277,7 @@ export function createShell(options) {
     mainErr: new Sink(maxOutput),
     deadline,
     signal: options.signal || null,
+    confineExternal: Boolean(options.confineExternal),
     lastCmdStatus: null,
     depth: 0,
     aborted: null,
@@ -322,6 +320,9 @@ export function createShell(options) {
   };
 
   shell.execSync = function execSyncExternal(argv, inputText, extraEnv) {
+    if (shell.confineExternal) {
+      return { code: 126, stdout: '', stderr: argv[0] + ': 沙箱模式下无法同步启动外部进程；请改用 command 或 exec\n' };
+    }
     const resolved = resolveExternal(scope, argv[0]);
     if (!resolved) return { code: 127, stdout: '', stderr: argv[0] + ': command not found\n' };
     const spawned = spawnArguments(resolved, argv[0], argv.slice(1));
@@ -336,6 +337,111 @@ export function createShell(options) {
     }, spawned.options));
     if (result.error) return { code: 127, stdout: '', stderr: argv[0] + ': ' + result.error.message + '\n' };
     return { code: result.status === null ? 1 : result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
+  };
+
+  shell.execExternal = async function execExternal(argv, inputText, extraEnv) {
+    const program = argv[0];
+    const resolved = resolveExternal(scope, program);
+    if (!resolved) return { code: 127, stdout: '', stderr: program + ': command not found\n' };
+    const spawned = spawnArguments(resolved, program, argv.slice(1));
+    let executable = spawned.file;
+    let args = spawned.args;
+    let env = Object.assign(exportEnv(scope), extraEnv || {});
+    let spawnOptions = spawned.options || {};
+    if (shell.prepareExternal) {
+      try {
+        const prepared = await shell.prepareExternal([executable, ...args], shell.signal, env);
+        if (prepared && Array.isArray(prepared.argv) && prepared.argv.length) {
+          executable = prepared.argv[0];
+          args = prepared.argv.slice(1);
+          if (prepared.env) env = prepared.env;
+          spawnOptions = Object.assign({}, spawnOptions, prepared.options || {});
+        }
+      } catch (error) {
+        const aborted = error && error.name === 'AbortError';
+        const timedOut = Boolean(shell.deadline && now() >= shell.deadline);
+        if (timedOut) shell.aborted = 'timeout';
+        const code = aborted ? (timedOut ? 124 : 130) : 126;
+        return { code, stdout: '', stderr: program + ': ' + (error && error.message ? error.message : String(error)) + '\n' };
+      }
+    }
+    const limit = 64 * 1024 * 1024;
+    return await new Promise((resolvePromise) => {
+      let settled = false;
+      let timer = null;
+      let onAbort = null;
+      const chunks = [];
+      const errChunks = [];
+      let outputSize = 0;
+      let errSize = 0;
+      const finish = (code) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (onAbort && shell.signal && typeof shell.signal.removeEventListener === 'function') {
+          shell.signal.removeEventListener('abort', onAbort);
+        }
+        resolvePromise({ code, stdout: chunks.join(''), stderr: errChunks.join('') });
+      };
+      const killTree = () => {
+        if (!child) return;
+        if (processNode.platform === 'win32' && child.pid) {
+          try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }); return; } catch { /* fall through */ }
+        }
+        try { child.kill('SIGKILL'); } catch { /* ignore */ }
+      };
+      let child;
+      try {
+        child = spawn(executable, args, Object.assign({
+          cwd: scope.hostCwd,
+          env,
+          windowsHide: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }, spawnOptions));
+      } catch (error) {
+        finish(127);
+        return;
+      }
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        if (outputSize >= limit) return;
+        const text = String(chunk);
+        const room = limit - outputSize;
+        chunks.push(text.length > room ? text.slice(0, room) : text);
+        outputSize += Math.min(text.length, room);
+      });
+      child.stderr.on('data', (chunk) => {
+        if (errSize >= limit) return;
+        const text = String(chunk);
+        const room = limit - errSize;
+        errChunks.push(text.length > room ? text.slice(0, room) : text);
+        errSize += Math.min(text.length, room);
+      });
+      child.on('error', (error) => {
+        if (error && error.name === 'AbortError') {
+          finish(shell.aborted === 'timeout' ? 124 : 130);
+          return;
+        }
+        finish(127);
+      });
+      child.on('close', (code) => finish(code === null ? 1 : code));
+      if (child.stdin) {
+        try { if (inputText) child.stdin.write(String(inputText)); } catch { /* ignore */ }
+        try { child.stdin.end(); } catch { /* ignore */ }
+      }
+      if (shell.signal) {
+        onAbort = () => { killTree(); finish(shell.aborted === 'timeout' ? 124 : 130); };
+        if (shell.signal.aborted) onAbort();
+        else if (typeof shell.signal.addEventListener === 'function') shell.signal.addEventListener('abort', onAbort, { once: true });
+      }
+      if (!settled && shell.deadline) {
+        const remaining = shell.deadline - now();
+        if (remaining <= 0) { shell.aborted = 'timeout'; killTree(); finish(124); return; }
+        timer = setTimeout(() => { shell.aborted = 'timeout'; killTree(); finish(124); }, remaining);
+        if (typeof timer.unref === 'function') timer.unref();
+      }
+    });
   };
 
   shell.coreutils = options.coreutils || new Map();
@@ -462,8 +568,31 @@ async function expandHereDoc(text, scope) {
   let index = 0;
   while (index < text.length) {
     const ch = text[index];
+    if (ch === '\\') {
+      const escaped = text[index + 1];
+      if (escaped === '$' || escaped === '`' || escaped === '\\') { out += escaped; index += 2; continue; }
+      if (escaped === '\n') { index += 2; continue; }
+      out += ch;
+      index++;
+      continue;
+    }
     if (ch !== '$') { out += ch; index++; continue; }
     const next = text[index + 1];
+    if (next === '(' && text[index + 2] === '(') {
+      let cursor = index + 3;
+      let depth = 0;
+      for (; cursor < text.length; cursor++) {
+        if (text[cursor] === '(') depth++;
+        else if (text[cursor] === ')') {
+          if (depth === 0 && text[cursor + 1] === ')') break;
+          depth--;
+        }
+      }
+      const inner = text.slice(index + 3, cursor);
+      out += String(evalArith(await expand.expandArithText(inner, scope), scope));
+      index = cursor + 2;
+      continue;
+    }
     if (next === '(') {
       let depth = 0;
       let cursor = index + 1;
@@ -585,7 +714,17 @@ async function execList(node, scope, io) {
       scope.lastStatus = 1;
       continue;
     }
-    status = await execNode(item.node, scope, io);
+    try {
+      status = await execNode(item.node, scope, io);
+    } catch (error) {
+      if (error instanceof ShellReturn && scope.frames.length === 0) {
+        io.error('return: can only `return` from a function or sourced script\n');
+        status = 1;
+        scope.lastStatus = 1;
+        continue;
+      }
+      throw error;
+    }
     scope.lastStatus = status;
     if (status !== 0 && errexitActive(scope)) throw new ShellExit(status);
   }
@@ -820,16 +959,33 @@ async function execBuiltinOrFunction(argv, scope, io, assigns) {
       err(text) { io.error(text); },
       check() { io.check(); },
       getVar(name) { return scope.getVar(name); },
-      runCommand(commandArgv, restArgs, stdinText) {
+      runCommand(commandArgv, restArgs, stdinText, envOverlay) {
         const argv = Array.isArray(commandArgv) ? commandArgv : [commandArgv].concat(restArgs || []);
-        const result = runCommandSync(scope, argv);
-        return { code: result.code, out: result.stdout, err: result.stderr };
+        const savedExported = scope.exported;
+        const savedVars = new Map();
+        if (envOverlay && typeof envOverlay === 'object') {
+          for (const [key, value] of Object.entries(envOverlay)) {
+            savedVars.set(key, scope.vars.get(key));
+            scope.vars.set(key, String(value));
+          }
+          scope.exported = new Set(Object.keys(envOverlay));
+        }
+        try {
+          const result = runCommandSync(scope, argv);
+          return { code: result.code, out: result.stdout, err: result.stderr };
+        } finally {
+          scope.exported = savedExported;
+          for (const [key, value] of savedVars) {
+            if (value === undefined) scope.vars.delete(key);
+            else scope.vars.set(key, value);
+          }
+        }
       },
       shell: scope.shell,
     };
     let result;
     try {
-      result = registry.get(program)(program, args, ctx);
+      result = registry.get(program)(program, [program, ...args], ctx);
     } catch (error) {
       if (error instanceof ShellError) { io.error(program + ': ' + error.message + '\n'); return 1; }
       throw error;
@@ -848,6 +1004,9 @@ export function runCommandSync(scope, argv) {
   if (!argv.length) return { code: 0, stdout: '', stderr: '' };
   const builtins = scope.shell ? scope.shell.builtins : null;
   if (builtins && builtins.has(argv[0])) {
+    if (scope.shell.confineExternal && (argv[0] === 'command' || argv[0] === 'exec')) {
+      return { code: 126, stdout: '', stderr: argv[0] + ': 沙箱模式下无法在同步上下文启动外部进程\n' };
+    }
     const chunks = [];
     const errChunks = [];
     const io = {
@@ -888,7 +1047,7 @@ export function runCommandSync(scope, argv) {
       },
       shell: scope.shell,
     };
-    const result = registry.get(argv[0])(argv[0], argv.slice(1), ctx);
+    const result = registry.get(argv[0])(argv[0], argv.slice(), ctx);
     if (result && result.out) chunks.push(result.out);
     if (result && result.err) errChunks.push(result.err);
     return { code: result && typeof result.code === 'number' ? result.code : 0, stdout: chunks.join(''), stderr: errChunks.join('') };
@@ -946,7 +1105,12 @@ async function execSimple(node, scope, io) {
       value = existing;
     }
     assignmentValues.push({ name, value });
-    scope.setVar(name, value);
+    if (assign.local) {
+      if (!scope.frames.length) { io.error('local: can only be used in a function\n'); return 1; }
+      scope.frames[scope.frames.length - 1].set(name, Array.isArray(value) ? value.slice() : value);
+    } else {
+      scope.setVar(name, value);
+    }
   }
 
   const restore = () => {
@@ -1021,14 +1185,23 @@ async function runExternal(argv, scope, io, redirection) {
         spawnOptions = Object.assign({}, spawnOptions, prepared.options || {});
       }
     } catch (error) {
-      if (error && (error.name === 'AbortError' || (scope.shell.signal && scope.shell.signal.aborted))) return 130;
+      if (error && (error.name === 'AbortError' || (scope.shell.signal && scope.shell.signal.aborted))) {
+        const timedOut = Boolean(scope.shell.deadline && now() >= scope.shell.deadline);
+        if (timedOut) scope.shell.aborted = 'timeout';
+        return timedOut ? 124 : 130;
+      }
       io.error(argv[0] + ': ' + (error && error.message ? error.message : String(error)) + '\n');
       return 126;
     }
   }
   const stdinText = io.stdinText;
-  return await new Promise((resolvePromise) => {
+  const signal = scope.shell && scope.shell.signal;
+  return await new Promise((resolvePromise, rejectPromise) => {
     let child;
+    let deadlineTimer = 0;
+    let timedOut = false;
+    let abortedBySignal = false;
+    let onAbort = null;
     try {
       child = spawn(executable, args, Object.assign({
         cwd: scope.hostCwd,
@@ -1043,23 +1216,69 @@ async function runExternal(argv, scope, io, redirection) {
     }
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => { try { io.write(chunk); } catch { /* sink limit */ } });
+    let cut = false;
+    const killTree = () => {
+      if (!child || !child.pid) return;
+      if (processNode.platform === 'win32') {
+        try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }); return; } catch { /* fall through */ }
+      }
+      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+    };
+    child.stdout.on('data', (chunk) => {
+      try { io.write(chunk); } catch { /* sink limit */ }
+      // A downstream stage only needs the captured prefix; stop a producer that
+      // would otherwise run forever (for example `yes`).
+      if (!cut && io.outSink && io.outSink.truncated) { cut = true; killTree(); }
+    });
     child.stderr.on('data', (chunk) => { try { io.error(chunk); } catch { /* sink limit */ } });
     child.on('error', (error) => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (onAbort && signal && typeof signal.removeEventListener === 'function') {
+        signal.removeEventListener('abort', onAbort);
+      }
+      if (timedOut) {
+        if (scope.shell) scope.shell.aborted = 'timeout';
+        rejectPromise(new ShellAbort('timeout'));
+        return;
+      }
+      if (abortedBySignal) { rejectPromise(new ShellAbort('aborted')); return; }
       io.error(argv[0] + ': ' + error.message + '\n');
       resolvePromise(127);
     });
-    child.on('close', (code) => { resolvePromise(code === null ? 1 : code); });
+    child.on('close', (code) => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (onAbort && signal && typeof signal.removeEventListener === 'function') {
+        signal.removeEventListener('abort', onAbort);
+      }
+      if (timedOut) {
+        if (scope.shell) scope.shell.aborted = 'timeout';
+        rejectPromise(new ShellAbort('timeout'));
+        return;
+      }
+      if (abortedBySignal) {
+        rejectPromise(new ShellAbort('aborted'));
+        return;
+      }
+      if (cut) return resolvePromise(0);
+      resolvePromise(code === null ? 1 : code);
+    });
+    if (scope.shell && scope.shell.deadline) {
+      const remaining = scope.shell.deadline - now();
+      if (remaining <= 0) {
+        timedOut = true;
+        killTree();
+      } else {
+        deadlineTimer = setTimeout(() => { timedOut = true; killTree(); }, remaining);
+      }
+    }
     if (child.stdin) {
       try { if (stdinText) child.stdin.write(stdinText); } catch { /* ignore */ }
       try { child.stdin.end(); } catch { /* ignore */ }
     }
-    if (scope.shell && scope.shell.signal) {
-      const signal = scope.shell.signal;
-      const onAbort = () => {
-        try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }); } catch { /* ignore */ }
-      };
-      if (typeof signal.addEventListener === 'function') signal.addEventListener('abort', onAbort, { once: true });
+    if (signal) {
+      onAbort = () => { abortedBySignal = true; killTree(); };
+      if (signal.aborted) onAbort();
+      else if (typeof signal.addEventListener === 'function') signal.addEventListener('abort', onAbort, { once: true });
     }
   });
 }
@@ -1071,9 +1290,27 @@ export async function runScript(options) {
   const io = createIo(scope, shell.mainOut, shell.mainErr, options.stdin || '');
   let exitCode = 0;
   let aborted = null;
+  let program = null;
   try {
-    const program = parse(lex(String(options.command || '')));
-    exitCode = await execNodes(program.body || [], scope, io);
+    program = parse(lex(String(options.command || '')));
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    shell.mainErr.write(message + '\n');
+    exitCode = /^(syntax error|unexpected EOF)/.test(message) ? 2 : 1;
+  }
+  if (program) try {
+    for (const node of program.body || []) {
+      try {
+        exitCode = await execNode(node, scope, io);
+      } catch (error) {
+        if (error instanceof ShellReturn) {
+          shell.mainErr.write('return: can only `return` from a function or sourced script\n');
+          exitCode = 1;
+          continue;
+        }
+        throw error;
+      }
+    }
   } catch (error) {
     if (error instanceof ShellExit) exitCode = error.code;
     else if (error instanceof ShellReturn) exitCode = error.code;
@@ -1084,7 +1321,6 @@ export async function runScript(options) {
     else if (error instanceof Error) { shell.mainErr.write((error.message || String(error)) + '\n'); exitCode = 1; }
     else { shell.mainErr.write(String(error) + '\n'); exitCode = 1; }
   }
-  if (scope.opts && scope.opts.errexit && exitCode !== 0 && exitCode !== 124) { /* already literal */ }
   const exitTrap = scope.traps && scope.traps.get('EXIT');
   if (exitTrap && !aborted) {
     scope.traps.delete('EXIT');

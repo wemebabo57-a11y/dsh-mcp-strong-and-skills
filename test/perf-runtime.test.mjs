@@ -105,14 +105,12 @@ function referenceTextCollector(limit = 64 * 1024) {
     read() {
       const truncated = bytes > headLimit + tailLimit;
       const omitted = Math.max(0, bytes - head.length - tail.length);
-      return {
-        text: [
-          decodeBytes(head, { trimTail: true }),
-          truncated ? '\n…[truncated: 已省略 ' + omitted + ' 字节，保留开头与末尾]…\n' : '',
-          decodeBytes(tail, { trimLead: true }),
-        ].join(''),
-        truncated, bytes, omitted,
-      };
+      const text = truncated
+        ? decodeBytes(head, { trimTail: true })
+          + '\n…[truncated: 已省略 ' + omitted + ' 字节，保留开头与末尾]…\n'
+          + decodeBytes(tail, { trimLead: true })
+        : decodeBytes(Buffer.concat([head, tail]));
+      return { text, truncated, bytes, omitted };
     },
   };
 }

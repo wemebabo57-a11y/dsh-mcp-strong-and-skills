@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runBuiltinShell } from '../src/builtin-shell.mjs';
@@ -97,6 +97,44 @@ test('builtin shell adds sort, uniq, tr and cut text helpers', async () => {
   }
 });
 
+test('builtin shell refuses recursive root deletion', async () => {
+  const root = await makeRoot();
+  try {
+    await writeFile(path.join(root, 'keep.txt'), 'KEEP');
+    const run = (command) => runBuiltinShell({ command, cwd: root, root, env: { ...process.env } });
+    for (const command of ['rm -rf /', 'rm -rf .', 'rm -rf --no-preserve-root /']) {
+      const result = await run(command);
+      assert.equal(result.exitCode, 1, command);
+      assert.match(result.stderr, /dangerous|Operation not permitted|根/, command);
+      assert.equal(await readFile(path.join(root, 'keep.txt'), 'utf8'), 'KEEP', command);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('builtin shell wraps external commands and hides process environment', async () => {
+  const root = await makeRoot();
+  const previous = process.env.REVIEW_SECRET;
+  process.env.REVIEW_SECRET = 'LEAKED';
+  let wraps = 0;
+  const sandbox = { enforce: true, wrap: async (argv) => { wraps++; return { argv }; } };
+  try {
+    const run = (command) => runBuiltinShell({ command, cwd: root, root, sandbox });
+    const command = await run('command node -e "process.stdout.write(process.env.REVIEW_SECRET || \'missing\')"');
+    assert.equal(command.exitCode, 0, command.stderr);
+    assert.equal(command.stdout, 'missing');
+    assert.ok(wraps >= 1);
+    const exec = await run('exec node -e "process.stdout.write(process.env.REVIEW_SECRET || \'missing\')"');
+    assert.equal(exec.exitCode, 0, exec.stderr);
+    assert.equal(exec.stdout, 'missing');
+    assert.ok(wraps >= 2);
+  } finally {
+    if (previous === undefined) delete process.env.REVIEW_SECRET;
+    else process.env.REVIEW_SECRET = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test('builtin shell rejects reads and writes that escape through directory links', async () => {
   const root = await makeRoot();
   const outside = await makeRoot();
@@ -115,6 +153,77 @@ test('builtin shell rejects reads and writes that escape through directory links
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });
+  }
+});
+test('builtin shell splits unquoted arrays and keeps later local declarations', async () => {
+  const root = await makeRoot();
+  try {
+    const run = (command) => runBuiltinShell({ command, cwd: root, root, env: { ...process.env } });
+    assert.equal((await run("a=('x y' z); printf '<%s>' ${a[@]}")).stdout, '<x><y><z>');
+    assert.equal((await run("a=('x y' z); printf '<%s>' \"${a[@]}\"")).stdout, '<x y><z>');
+    assert.equal((await run("a=('x y' z); printf '<%s>' pre${a[@]}post")).stdout, '<prex><y><zpost>');
+    assert.equal((await run("a=('x y' z); printf '<%s>' \"pre${a[@]}post\"")).stdout, '<prex y><zpost>');
+    assert.equal((await run("a=('x,y' 'z'); IFS=,; printf '<%s>' ${a[@]}")).stdout, '<x><y><z>');
+    assert.equal((await run("set -- 'x y' z; printf '<%s>' $@")).stdout, '<x><y><z>');
+    assert.equal((await run("set -- 'x y' z; printf '<%s>' \"$@\"")).stdout, '<x y><z>');
+    assert.equal((await run("f(){ local a=(1 2) b=3; echo \"${a[0]}:$b\"; }; f; echo \"${b-unset}\"")).stdout, '1:3\nunset\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('builtin shell refuses writes through a final symlink to an outside file', async (t) => {
+  const root = await makeRoot();
+  const outside = await makeRoot();
+  try {
+    const target = path.join(outside, 'secret.txt');
+    await writeFile(target, 'SECRET');
+    const link = path.join(root, 'link.txt');
+    try { await symlink(target, link, 'file'); }
+    catch (error) { t.skip('file symlinks unavailable: ' + error.code); return; }
+    const run = (command) => runBuiltinShell({ command, cwd: root, root, env: { ...process.env } });
+    const before = await stat(target);
+    const touched = await run('touch link.txt');
+    assert.equal(touched.exitCode, 1);
+    assert.match(touched.stderr, /符号链接|路径/);
+    const chmod = await run('chmod 600 link.txt');
+    assert.equal(chmod.exitCode, 1);
+    const after = await stat(target);
+    assert.equal(after.mtimeMs, before.mtimeMs);
+    assert.equal(after.mode & 0o777, before.mode & 0o777);
+
+    const dirLink = path.join(root, 'dirlink');
+    try { await symlink(outside, dirLink, 'junction'); }
+    catch (error) { t.skip('directory symlinks unavailable: ' + error.code); return; }
+    const nestedLink = path.join(outside, 'nested-link.txt');
+    await symlink(target, nestedLink, 'file');
+    const removed = await run('rm dirlink/nested-link.txt');
+    assert.equal(removed.exitCode, 1);
+    assert.match(removed.stderr, /符号链接|路径/);
+    assert.ok(await stat(nestedLink));
+    const moved = await run('mv dirlink/nested-link.txt stolen.txt');
+    assert.equal(moved.exitCode, 1);
+    assert.ok(await stat(nestedLink));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+test('builtin shell times out and aborts asynchronous external commands', async () => {
+  const root = await makeRoot();
+  try {
+    const run = (command, extra = {}) => runBuiltinShell({ command, cwd: root, root, env: { ...process.env }, ...extra });
+    const started = Date.now();
+    const timedOut = await run('node -e "setTimeout(() => process.exit(0), 5000)"', { timeoutMs: 500 });
+    assert.equal(timedOut.timedOut, true);
+    assert.equal(timedOut.exitCode, 124);
+    assert.ok(Date.now() - started < 3500);
+    const controller = new AbortController();
+    const running = run('node -e "setTimeout(() => {}, 5000)"', { signal: controller.signal });
+    setTimeout(() => controller.abort(), 150);
+    await assert.rejects(running, (error) => error.name === 'AbortError');
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 test('builtin shell covers printf, seq and exit without falling back to MSYS tools', async () => {

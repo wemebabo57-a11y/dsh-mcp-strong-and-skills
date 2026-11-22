@@ -282,6 +282,8 @@ class Parser {
     const assigns = [];
     const words = [];
     const redirs = [];
+    const declarations = new Set(['local', 'declare', 'typeset', 'readonly']);
+    let declaration = null;
     for (;;) {
       const token = this.peek();
       if (token.t === 'redir' || token.t === 'heredoc') {
@@ -290,6 +292,21 @@ class Parser {
       }
       if (token.t !== 'word') break;
       const word = this.next();
+      if (declaration !== null && words.length > 0) {
+        const declared = splitAssignment(word);
+        if (declared && !declared.value.parts.length && this.atOp('(')) {
+          this.next();
+          const items = [];
+          while (!this.atOp(')')) {
+            if (this.peek().t !== 'word') this.unexpected(this.peek());
+            items.push(toWord(this.next()));
+          }
+          this.next();
+          assigns.push({ name: declared.name, value: { parts: [] }, array: items, local: declaration === 'local' });
+          words.length = 0;
+          continue;
+        }
+      }
       if (words.length === 0) {
         const rawWord = word.raw || '';
         const firstPart = word.parts && word.parts[0];
@@ -315,6 +332,7 @@ class Parser {
         }
         const assignment = splitAssignment(word);
         if (assignment) {
+          if (declaration === 'local') assignment.local = true;
           if (!assignment.value.parts.length && this.atOp('(')) {
             this.next();
             const items = [];
@@ -323,7 +341,7 @@ class Parser {
               items.push(toWord(this.next()));
             }
             this.next();
-            assigns.push({ name: assignment.name, value: { parts: [] }, array: items });
+            assigns.push({ name: assignment.name, value: { parts: [] }, array: items, local: declaration === 'local' });
             continue;
           }
           assigns.push(assignment);
@@ -331,6 +349,10 @@ class Parser {
         }
       }
       words.push({ parts: word.parts, cond: word.cond });
+      if (words.length === 1) {
+        const name = word.raw || '';
+        if (declarations.has(name)) declaration = name;
+      }
     }
     if (assigns.length === 0 && words.length === 0 && redirs.length === 0) {
       this.unexpected(this.peek());

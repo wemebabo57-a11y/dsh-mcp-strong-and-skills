@@ -95,8 +95,8 @@ export function evalArith(src, scope, depth = 0) {
     if (!token) throw new Error('arithmetic syntax error: unexpected end of expression');
     if (token.t === 'num') return parseNumber(token.v);
     if (token.t === 'name') {
-      if (peek() && peek().v === '++') { next(); const value = getVariable(token.v) + 1; scope.setVar(token.v, String(value)); return value; }
-      if (peek() && peek().v === '--') { next(); const value = getVariable(token.v) - 1; scope.setVar(token.v, String(value)); return value; }
+      if (peek() && peek().v === '++') { next(); const old = getVariable(token.v); scope.setVar(token.v, String(old + 1)); return old; }
+      if (peek() && peek().v === '--') { next(); const old = getVariable(token.v); scope.setVar(token.v, String(old - 1)); return old; }
       return getVariable(token.v);
     }
     if (token.v === '(') { const value = expression(1); expect(')'); return value; }

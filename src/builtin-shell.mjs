@@ -4,6 +4,7 @@ import path from 'node:path';
 import { WorkspaceError } from './workspace.mjs';
 import { trimToLimit } from './stream-output.mjs';
 import { runnerEnvironment } from './sandbox.mjs';
+import { safeEnv } from './safe-env.mjs';
 import { createFs, runShell } from './shell/index.mjs';
 
 const MAX_OUTPUT = 64 * 1024;
@@ -48,15 +49,17 @@ export async function runBuiltinShell({ command, cwd, root, cwdLabel = '.', time
       fs: shellFs,
       cwdHost,
       cwdV,
-      env: Object.assign({}, env),
+      env: Object.assign({}, Object.keys(env || {}).length ? env : safeEnv()),
       stdin: '',
       timeoutMs,
       maxOutput: RUN_LIMIT,
       signal: combined,
       prepareExternal,
+      confineExternal: Boolean(sandbox && sandbox.enforce),
     });
   } catch (error) {
     if (error instanceof WorkspaceError) throw error;
+    if (error && error.name === 'AbortError') throw error;
     throw new WorkspaceError('BUILTIN_SHELL_FAILED', error instanceof Error ? error.message : String(error));
   }
   signal?.throwIfAborted();

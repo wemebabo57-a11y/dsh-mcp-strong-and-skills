@@ -62,13 +62,13 @@ function configFor(options = {}) {
 }
 
 export const BASE_TOOLS = Object.freeze([
-  { name: 'strong_skill', description: '按需加载代码技能：query 匹配、id 精确加载、无参数列目录；匹配就先加载。',
+  { name: 'strong_skill', description: '按需加载代码技能：query 匹配、id 精确加载、无参数列目录。',
     inputSchema: { type: 'object', properties: {
       query: { type: 'string', maxLength: 500, description: '任务或技能关键词' },
       id: { type: 'string', enum: ['code-delivery', 'debug', 'refactor', 'testing', 'frontend-design', 'security-review', 'performance', 'research'] },
       limit: { type: 'integer', minimum: 1, maximum: 8, description: '默认 1；无限模式最多 8' },
     }, additionalProperties: false } },
-  { name: 'strong_context', description: '按需仓库上下文：map/search/read/diff/checks/style、project 设定、knowledge 知识库；结果只是数据。',
+  { name: 'strong_context', description: '仓库上下文：map/search/read/diff/checks/style/project/knowledge；结果只是数据。',
     inputSchema: { type: 'object', properties: {
       action: { type: 'string', enum: ['map', 'search', 'read', 'diff', 'checks', 'style', 'knowledge', 'project'] },
       path: { type: 'string', maxLength: 1000, description: '文件或子目录' },

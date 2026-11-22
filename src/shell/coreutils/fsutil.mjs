@@ -69,6 +69,15 @@ function safeLstat(ctx, target) {
   }
 }
 
+function lstatWithError(ctx, target) {
+  try { return { info: ctx.fs.lstat(target, cwdOf(ctx)), error: null }; }
+  catch (error) {
+    if (error && (error.code === 'EOUTSIDE' || error.code === 'EPERM' || error.code === 'EROFS')) return { info: null, error };
+    if (error && error.code) return { info: null, error: null };
+    throw error;
+  }
+}
+
 function safeStat(ctx, target) {
   try {
     return ctx.fs.stat(target, cwdOf(ctx));
@@ -457,8 +466,17 @@ function rmMain(ctx, argv) {
   let status = 0;
   for (const operand of parsed.args) {
     check(ctx);
-    const info = safeLstat(ctx, operand);
+    let operandPath = operand;
+    try { operandPath = ctx.fs.vpath(operand, cwdOf(ctx)); } catch { /* keep literal for diagnostics */ }
+    if (recursive && operandPath === '/') {
+      errs.push("rm: it is dangerous to operate recursively on '/'\nrm: the project root is always protected\n");
+      status = 1;
+      continue;
+    }
+    const probed = lstatWithError(ctx, operand);
+    const info = probed.info;
     if (!info) {
+      if (probed.error) { errs.push(errorText('rm', operand, probed.error.code)); status = 1; continue; }
       if (force) continue;
       errs.push(errorText('rm', operand, 'ENOENT'));
       status = 1;
@@ -593,7 +611,12 @@ function mvMain(ctx, argv) {
   if (!destIsDir && sources.length > 1) return usageError('mv', 'target ' + quote(dest) + ' is not a directory');
   for (const source of sources) {
     check(ctx);
-    if (!safeLstat(ctx, source)) { errs.push(errorText('mv', source, 'ENOENT')); status = 1; continue; }
+    const probedSource = lstatWithError(ctx, source);
+    if (!probedSource.info) {
+      errs.push(errorText('mv', source, probedSource.error ? probedSource.error.code : 'ENOENT'));
+      status = 1;
+      continue;
+    }
     const target = destIsDir ? joinPath(dest, baseName(source)) : dest;
     if (noClobber && safeLstat(ctx, target)) continue;
     if (source === target) continue;
@@ -654,7 +677,7 @@ function touchMain(ctx, argv) {
       }
     }
     try {
-      const entry = ctx.fs.resolve(operand, cwdOf(ctx));
+      const entry = ctx.fs.assertWritable(operand, cwdOf(ctx));
       if (entry && entry.host) {
         const stamp = new Date(now);
         const atime = onlyMtime ? undefined : stamp;
@@ -701,7 +724,7 @@ function lnMain(ctx, argv) {
     }
     try {
       const from = ctx.fs.resolve(source, cwdOf(ctx));
-      const to = ctx.fs.resolve(target, cwdOf(ctx));
+      const to = ctx.fs.assertWritable(target, cwdOf(ctx));
       if (!from || from.device || !to || to.device) throw Object.assign(new Error('invalid path'), { code: 'EINVAL' });
       if (symbolic) {
         const info = safeStat(ctx, source);
@@ -978,7 +1001,7 @@ function envMain(ctx, argv) {
   const parsed = parseOptions(argv, {
     i: 'bool', u: 'value', v: 'bool', '0': 'bool', C: 'value', S: 'value',
     'ignore-environment': 'bool', unset: 'value', null: 'bool', chdir: 'value', split: 'value',
-  });
+  }, { stopAtOperand: true });
   if (parsed.error) return usageError('env', parsed.error);
   const ignore = !!(parsed.opts.get('i') || parsed.opts.get('ignore-environment'));
   const env = {};
@@ -1002,7 +1025,7 @@ function envMain(ctx, argv) {
     return { code: 0, out: keys.map((key) => key + '=' + env[key] + '\n').join(''), err: '' };
   }
   if (typeof ctx.runCommand !== 'function') return usageError('env', 'cannot execute commands in this context');
-  return ctx.runCommand(command);
+  return ctx.runCommand(command, [], ctx.stdin || '', env);
 }
 
 /* -------------------------------------------------------------------- uname */
@@ -1081,5 +1104,7 @@ const TABLE = {
 export function main(prog, argv, ctx) {
   const handler = TABLE[prog];
   if (!handler) return usageError(prog, 'not implemented');
-  return handler(ctx, argv.slice());
+  const args = Array.isArray(argv) ? argv.slice() : [];
+  if (args.length && args[0] === prog) args.shift();
+  return handler(ctx, args);
 }

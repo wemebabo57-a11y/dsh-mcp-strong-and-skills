@@ -50,10 +50,10 @@ DeepSeek 的 API thinking 与 reasoning effort 由宿主模型设置控制。插
 
 上下文增量采用字符启发式估算，不是 tokenizer 或计费统计：
 
-- 默认均衡扩展配置约 **1,383 tokens**；精简工具 + 关闭增强思考约 **517 tokens**；开启 Shell 后约 **1,753 tokens**，精简 + Shell 约 **888 tokens**。
-- Claude 模式约增加 **125 tokens**；we need to 模式约增加 **84 tokens**；两者同时开启约增加 **208 tokens**，总计约 **1,591 tokens**。
-- `deepseek-flash` 均衡扩展配置约 **1,437 tokens**，`deepseek-v4-pro` 约 **1,436 tokens**。
-- 无限模式默认约 **1,571 tokens**；无限 + 精简工具 + 关闭增强思考约 **1,307 tokens**，但结果与读取范围不再截断。
+- 默认均衡扩展配置约 **1,318 tokens**；精简工具 + 关闭增强思考约 **501 tokens**；开启 Shell 后约 **1,654 tokens**，精简 + Shell 约 **838 tokens**。
+- Claude 模式约增加 **125 tokens**；we need to 模式约增加 **84 tokens**；两者同时开启约增加 **208 tokens**，总计约 **1,526 tokens**。
+- `deepseek-flash` 均衡扩展配置约 **1,372 tokens**，`deepseek-v4-pro` 约 **1,371 tokens**。
+- 无限模式默认约 **1,506 tokens**；无限 + 精简工具 + 关闭增强思考约 **1,242 tokens**，但结果与读取范围不再截断。
 
 模式默认关闭，因此普通默认预算不受影响。`budgetReport` 会区分“请求开启”和“实际生效”，无限模式还报告 `maxResultChars: "unlimited"`、`maxFiles: 5,000` 与 `maxSkillLoads: 8`。
 
