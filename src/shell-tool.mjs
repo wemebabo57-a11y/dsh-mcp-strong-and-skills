@@ -7,6 +7,7 @@ import { runBuiltinShell } from './builtin-shell.mjs';
 import { createTailCollector } from './stream-output.mjs';
 import { runnerEnvironment } from './sandbox.mjs';
 import { safeEnv } from './safe-env.mjs';
+import { resolveTaskkillPath } from './shell/exec.mjs';
 
 export { safeEnv };
 
@@ -284,7 +285,9 @@ function shellHint({ timedOut, denied, sandbox, stdout, stderr }) {
 function killTree(child) {
   if (!child?.pid) return;
   if (process.platform === 'win32') {
-    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    const taskkill = resolveTaskkillPath();
+    if (!taskkill) { try { child.kill('SIGKILL'); } catch {} return; }
+    const killer = spawn(taskkill, ['/pid', String(child.pid), '/T', '/F'], { cwd: path.dirname(taskkill), windowsHide: true, stdio: 'ignore' });
     killer.once('error', () => { try { child.kill('SIGKILL'); } catch {} });
     return;
   }

@@ -6,6 +6,8 @@ import {
   WEB_OPEN_CACHE_LIMIT,
   clearWebCache,
   runWebTool,
+  setFetchTransport,
+  setLookupTransport,
 } from '../src/web-tools.mjs';
 
 const DDG = [
@@ -23,14 +25,17 @@ function htmlResponse(html, { url = '', type = 'text/html; charset=utf-8' } = {}
   return response;
 }
 
+const STUB_LOOKUP = async () => [{ address: '93.184.216.34', family: 4 }];
+
 async function withFetch(stub, run) {
-  const original = globalThis.fetch;
-  globalThis.fetch = stub;
+  setFetchTransport(stub);
+  setLookupTransport(STUB_LOOKUP);
   clearWebCache();
   try {
     return await run();
   } finally {
-    globalThis.fetch = original;
+    setFetchTransport(null);
+    setLookupTransport(null);
     clearWebCache();
   }
 }

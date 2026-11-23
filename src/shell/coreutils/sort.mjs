@@ -586,6 +586,26 @@ function makeLineCompare(config) {
   };
 }
 
+function mergeSortLines(items, compare, ctx) {
+  if (items.length < 2) return items;
+  const mid = items.length >> 1;
+  const left = mergeSortLines(items.slice(0, mid), compare, ctx);
+  const right = mergeSortLines(items.slice(mid), compare, ctx);
+  const merged = new Array(items.length);
+  let i = 0;
+  let j = 0;
+  let k = 0;
+  let operations = 0;
+  while (i < left.length && j < right.length) {
+    if ((operations += 1) % 4096 === 0) ctx.check?.();
+    if (compare(right[j], left[i]) < 0) merged[k++] = right[j++];
+    else merged[k++] = left[i++];
+  }
+  while (i < left.length) merged[k++] = left[i++];
+  while (j < right.length) merged[k++] = right[j++];
+  return merged;
+}
+
 function runSort(prog, args, ctx) {
   const parsed = parseCommandOptions(args, SORT_OPTIONS, SORT_SHORT_VALUES);
   if (parsed.error) return usageError(prog, parsed.error);
@@ -606,8 +626,7 @@ function runSort(prog, args, ctx) {
   let text = '';
   loop(ctx, input.files, 64, (file) => { text += file.text; });
   const compare = makeLineCompare(config);
-  const lines = splitLines(text);
-  lines.sort(compare);
+  const lines = mergeSortLines(splitLines(text), compare, ctx);
   let result = lines;
   if (config.unique) {
     result = [];

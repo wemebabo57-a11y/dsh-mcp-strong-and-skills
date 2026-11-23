@@ -1,7 +1,9 @@
 // POSIX glob primitives: brace expansion, segment compilation, matching.
 // Pure functions; no filesystem access. Shared by fs.mjs and expand.mjs.
 
-const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/g;
+// No /g flag: a stateful lastIndex made escapeRegex skip every other special
+// character, so patterns such as a..* matched names they should not.
+const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/;
 
 function escapeRegex(ch) {
   return REGEX_SPECIAL.test(ch) ? '\\' + ch : ch;
@@ -37,22 +39,34 @@ function splitAlternatives(body) {
   return out;
 }
 
+export const BRACE_MAX_EXPANSIONS = 4096;
+export const BRACE_MAX_LENGTH = 65536;
+
 /** Expand the first top-level {a,b} group, recursively. Returns at least [pattern]. */
-export function braceExpand(pattern) {
-  for (let i = 0; i < pattern.length; i++) {
-    if (pattern[i] === '\\') { i++; continue; }
-    if (pattern[i] !== '{') continue;
-    const end = findBrace(pattern, i);
-    if (end < 0) return [pattern];
-    const alts = splitAlternatives(pattern.slice(i + 1, end));
-    if (alts.length < 2) continue;
-    const head = pattern.slice(0, i);
-    const tail = pattern.slice(end + 1);
-    const out = [];
-    for (const alt of alts) for (const expanded of braceExpand(head + alt + tail)) out.push(expanded);
-    return out;
+export function braceExpand(pattern, budget = { remaining: BRACE_MAX_EXPANSIONS }) {
+  if (String(pattern).length > BRACE_MAX_LENGTH) throw new RangeError('brace pattern too long');
+  function expand(current) {
+    for (let i = 0; i < current.length; i++) {
+      if (current[i] === '\\') { i++; continue; }
+      if (current[i] !== '{') continue;
+      const end = findBrace(current, i);
+      if (end < 0) return [current];
+      const alts = splitAlternatives(current.slice(i + 1, end));
+      if (alts.length < 2) continue;
+      const head = current.slice(0, i);
+      const tail = current.slice(end + 1);
+      const out = [];
+      for (const alt of alts) {
+        for (const expanded of expand(head + alt + tail)) {
+          if (--budget.remaining < 0) throw new RangeError('brace expansion too large');
+          out.push(expanded);
+        }
+      }
+      return out;
+    }
+    return [current];
   }
-  return [pattern];
+  return expand(pattern);
 }
 
 /** Compile one path segment into a matcher. Returns null when the segment has no magic. */

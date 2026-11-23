@@ -57,7 +57,7 @@ async function visionCapable(ctx, context) {
 }
 
 /** Turn a saved screenshot into an image block only when the current route accepts images. */
-async function attachScreenshot(ctx, execution, value) {
+async function attachScreenshot(ctx, execution, value, toolName = 'strong_browse') {
   const image = value && typeof value === 'object' ? value.screenshot : null;
   if (!image?.path) return { value, blocks: [] };
   const copy = { ...value };
@@ -76,7 +76,7 @@ async function attachScreenshot(ctx, execution, value) {
     }
   }
   copy.image = { path: image.path, width: image.width, height: image.height, attached };
-  if (!attached) copy.imageHint = '当前模型不接受图片输入，只返回截图路径；需要文字请用 strong_web，或换视觉模型。';
+  if (!attached) copy.imageHint = toolName === 'strong_desktop' ? '当前模型不接受图片输入，只返回截图路径；可换视觉模型，或先用 windows 定位。' : '当前模型不接受图片输入，只返回截图路径；需要文字请用 strong_web，或换视觉模型。';
   return { value: copy, blocks };
 }
 
@@ -85,6 +85,7 @@ function expanded(config) { return config.toolSet === 'expanded' || config.unlim
 function registrationOptions(ctx, tool, currentConfig) {
   if (BASE_TOOLS.some(base => base.name === tool.name)) return undefined;
   if (tool.name === 'strong_shell') return { when: () => currentConfig().shellTool };
+  if (tool.name === 'strong_desktop') return { when: () => expanded(currentConfig()) && currentConfig().desktopTool };
   if (tool.name === 'strong_web') return { when: () => expanded(currentConfig()) && currentConfig().webTool };
   if (tool.name === 'strong_browse') return { when: async context => {
     const config = currentConfig();
@@ -114,7 +115,7 @@ export function apply(ctx, options = {}) {
       name: tool.name, description: tool.description, parameters: tool.inputSchema,
       output: { schema: { type: 'object', additionalProperties: true },
         render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }, ...(value && typeof value === 'object' ? screenshotBlocks.get(value) ?? [] : [])] },
-      isConcurrencySafe: () => tool.name !== 'strong_shell',
+      isConcurrencySafe: () => tool.name !== 'strong_shell' && tool.name !== 'strong_desktop',
       async execute(args, execution) {
         execution.signal.throwIfAborted();
         const root = execution.agent
@@ -124,8 +125,8 @@ export function apply(ctx, options = {}) {
         // Shell executions inherit the host session's sandbox policy; failures fail closed.
         const sandbox = tool.name === 'strong_shell' ? await resolveShellSandbox(ctx, execution, root) : null;
         let value = await new StrongEngine(root, currentConfig()).call(tool.name, args, { signal: execution.signal, sandbox });
-        if (tool.name === 'strong_browse') {
-          const attached = await attachScreenshot(ctx, execution, value);
+        if (tool.name === 'strong_browse' || tool.name === 'strong_desktop') {
+          const attached = await attachScreenshot(ctx, execution, value, tool.name);
           value = attached.value;
           if (attached.blocks.length) screenshotBlocks.set(value, attached.blocks);
         }

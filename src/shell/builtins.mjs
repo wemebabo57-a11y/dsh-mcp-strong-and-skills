@@ -5,6 +5,9 @@ import { ShellError } from './fs.mjs';
 import { ShellExit, ShellBreak, ShellContinue, ShellReturn } from './errors.mjs';
 import { evalArith } from './arith.mjs';
 import * as expand from './expand.mjs';
+import { assertSafeRegex } from './regex-safety.mjs';
+
+const MAX_PRINTF_FIELD = 1_000_000;
 
 function text(value) {
   if (value === undefined || value === null) return '';
@@ -60,8 +63,8 @@ function escapeBytes(text) {
 
 function padNumber(digits, negative, flags, width, precision, prefix) {
   let body = digits;
-  if (precision !== null && precision !== undefined) {
-    while (body.length < precision) body = '0' + body;
+  if (precision !== null && precision !== undefined && body.length < precision) {
+    body = '0'.repeat(precision - body.length) + body;
   }
   let sign = negative ? '-' : (flags.includes('+') ? '+' : (flags.includes(' ') ? ' ' : ''));
   if (prefix) sign = prefix + sign;
@@ -143,7 +146,8 @@ function printfFormat(format, args) {
       let widthText = '';
       while (cursor < format.length && /[0-9]/.test(format[cursor])) { widthText += format[cursor]; cursor++; }
       if (format[cursor] === '*') { widthText = String(values[state.index++] ?? 0); cursor++; }
-      const width = widthText === '' ? 0 : Number(widthText);
+      const rawWidth = widthText === '' ? 0 : Number(widthText);
+      const width = Number.isFinite(rawWidth) ? Math.min(Math.max(0, rawWidth), MAX_PRINTF_FIELD) : 0;
       let precision = null;
       if (format[cursor] === '.') {
         cursor++;
@@ -151,6 +155,7 @@ function printfFormat(format, args) {
         while (cursor < format.length && /[0-9]/.test(format[cursor])) { precisionText += format[cursor]; cursor++; }
         if (format[cursor] === '*') { precision = Number(values[state.index++] ?? 0); cursor++; }
         else precision = precisionText === '' ? 0 : Number(precisionText);
+        precision = Number.isFinite(precision) ? Math.min(Math.max(0, precision), MAX_PRINTF_FIELD) : 0;
       }
       while (cursor < format.length && 'hlLjzt'.includes(format[cursor])) cursor++;
       const conversion = format[cursor];
@@ -192,7 +197,7 @@ function printfFormat(format, args) {
       if (conversion === 'o') { out += padNumber((Math.trunc(value) >>> 0).toString(8), false, flags, width, precision, flags.includes('#') ? '0' : ''); continue; }
       if (conversion === 'x') { out += padNumber((Math.trunc(value) >>> 0).toString(16), false, flags, width, precision, flags.includes('#') ? '0x' : ''); continue; }
       if (conversion === 'X') { out += padNumber((Math.trunc(value) >>> 0).toString(16).toUpperCase(), false, flags, width, precision, flags.includes('#') ? '0X' : ''); continue; }
-      const digits = precision === null || precision === undefined ? 6 : precision;
+      const digits = precision === null || precision === undefined ? 6 : Math.min(precision, 100);
       let formatted;
       if (conversion === 'f' || conversion === 'F') formatted = Math.abs(value).toFixed(digits);
       else if (conversion === 'e' || conversion === 'E') formatted = Math.abs(value).toExponential(digits);
@@ -257,7 +262,7 @@ function testBinary(ctx, left, op, right, mode) {
   const a = text(left);
   const b = text(right);
   if (op === '=~') {
-    try { return new RegExp(b).test(a); } catch { return false; }
+    try { assertSafeRegex(b); return new RegExp(b).test(a); } catch { return false; }
   }
   if (op === '=' || op === '==') return mode && mode.pattern ? expand.matchPattern(b, a) : a === b;
   if (op === '!=') return mode && mode.pattern ? !expand.matchPattern(b, a) : a !== b;
@@ -273,13 +278,14 @@ function testBinary(ctx, left, op, right, mode) {
   if (op === '-ge') return na >= nb;
   if (op === '-nt') {
     const sa = testStat(ctx, a);
+    if (!sa) return false;
     const sb = testStat(ctx, b);
-    return Boolean(sa && sb && sa.mtime > sb.mtime);
+    return !sb || sa.mtimeMs > sb.mtimeMs;
   }
   if (op === '-ot') {
     const sa = testStat(ctx, a);
     const sb = testStat(ctx, b);
-    return Boolean(sa && sb && sa.mtime < sb.mtime);
+    return Boolean(sa && sb && sa.mtimeMs < sb.mtimeMs);
   }
   if (op === '-ef') {
     const sa = testStat(ctx, a);
@@ -427,8 +433,12 @@ export function createBuiltins(shell) {
     }
     const info = (() => { try { return scope.fs.stat(next, '/'); } catch { return null; } })();
     if (!info || !info.isDir) { io.error('cd: ' + target + ': Not a directory\n'); return 1; }
+    let hostNext;
+    try { hostNext = scope.fs.resolve(next, '/').host; }
+    catch { io.error('cd: ' + target + ': No such file or directory\n'); return 1; }
     scope.vars.set('OLDPWD', scope.cwd);
     scope.cwd = next;
+    scope.hostCwd = hostNext;
     scope.vars.set('PWD', next);
     if (args.includes('-')) io.write(next + '\n');
     return 0;
@@ -682,7 +692,7 @@ export function createBuiltins(shell) {
     const source = io.input || { text: io.stdinText || '', pos: 0 };
     const text_ = source.text;
     if (source.pos >= text_.length) {
-      if (options.array) scope.setVar(options.array, '');
+      if (options.array) scope.setVar(options.array, []);
       return 1;
     }
     let line = '';
@@ -708,8 +718,7 @@ export function createBuiltins(shell) {
     const ifs = scope.getVar('IFS') === undefined ? ' \t\n' : text(scope.getVar('IFS'));
     if (options.array) {
       const parts = splitReadLine(line, ifs);
-      scope.setVar(options.array, '(' + parts.join(' ') + ')');
-      scope.vars.set(options.array, parts.join(' '));
+      scope.setVar(options.array, parts);
       if (names.length) scope.setVar(names[0], line);
       return sawDelimiter || line.length ? 0 : 1;
     }

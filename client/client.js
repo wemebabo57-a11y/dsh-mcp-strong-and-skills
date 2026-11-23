@@ -84,7 +84,7 @@ const SETTINGS_ENTRY = 'strong-skills';
 const SETTINGS_PACKAGE = 'dsh-strong-skills';
 const SETTINGS_FIELDS = Object.freeze([
   'enhancedThinking', 'thinkingLevel', 'clarification', 'modelPreset', 'toolSet',
-  'webTool', 'webAllowPrivate', 'browseTool', 'ptcMode', 'browserPath',
+  'webTool', 'webAllowPrivate', 'browseTool', 'desktopTool', 'ptcMode', 'browserPath',
   'claudeMode', 'weNeedToThinking', 'unlimitedTokens',
   'shellTool', 'shellBackend', 'shellPath', 'wslDistro',
   'profile', 'allowBrandColors', 'brandIntent', 'maxOutputChars', 'maxFiles',
@@ -117,7 +117,7 @@ const PROFILE_LIMITS = Object.freeze({
 /** Config's optional limit overrides inherit their runtime defaults from the selected profile. */
 function displaySettings(value) {
   if (value === undefined) return undefined;
-  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '', webTool: true, webAllowPrivate: false, browseTool: 'auto', ptcMode: 'auto', browserPath: '' };
+  const defaults = { ...PROFILE_LIMITS[value.profile ?? 'balanced'], maxFileBytes: 262144, claudeMode: false, weNeedToThinking: false, unlimitedTokens: false, knowledgeConfig: '', shellTool: false, shellBackend: 'auto', shellPath: '', wslDistro: '', webTool: true, webAllowPrivate: false, browseTool: 'auto', desktopTool: false, ptcMode: 'auto', browserPath: '' };
   if (value.shellTool === undefined && value.bashTool === true) defaults.shellTool = true;
   const resolved = { ...value };
   for (const [field, fallback] of Object.entries(defaults)) {
@@ -128,7 +128,7 @@ function displaySettings(value) {
 
 function validateSetting(field, value) {
   if (!SETTINGS_FIELDS.includes(field)) throw new TypeError(`Unknown setting: ${field}`);
-  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool', 'webTool', 'webAllowPrivate'].includes(field)) {
+  if (['enhancedThinking', 'allowBrandColors', 'claudeMode', 'weNeedToThinking', 'unlimitedTokens', 'shellTool', 'webTool', 'webAllowPrivate', 'desktopTool'].includes(field)) {
     if (typeof value !== 'boolean') throw new TypeError(`${field} must be boolean`);
   } else if (field === 'knowledgeConfig') {
     parseKnowledgeConfig(value);
@@ -350,7 +350,7 @@ const EN = Object.freeze({
   pro: 'DeepSeek V4 Pro', flash: 'DeepSeek V4.1 Flash · 1017', generic: 'Universal',
   modelNote: 'Automatic uses specialized guidance for supported DeepSeek models and universal enhancements for all others. Choose the actual model and provider reasoning settings in Settings → Models. The Flash strategy follows the rolling deepseek-flash API model.',
   tools: 'Tool set', toolsHint: 'Expanded adds navigation and inspection tools; compact keeps the core tools.', compact: 'Compact', expanded: 'Expanded',
-  network: 'Web and browser tools', networkHint: 'Compact mode omits both; expanded mode adds them. Browser screenshots are only shown to vision models.',
+  network: 'Web, browser and desktop tools', networkHint: 'Compact mode omits them; expanded mode adds them. Browser screenshots are only shown to vision models; desktop control is opt-in and visible actions may be irreversible.',
   webTool: 'Web search tool', webToolHint: 'Adds strong_web: search returns a short JSON list of ids, titles, links, and snippets; open reads a page by id or URL without launching a browser.',
   webAllowPrivate: 'Allow private network access', webAllowPrivateHint: 'Off by default to block SSRF: strong_web rejects localhost, private, link-local, and cloud metadata addresses. Enable only when you intentionally need to read a local or intranet page.',
   browseTool: 'Browser tool', browseToolHint: 'Adds strong_browse: a real headless Chrome/Edge with no visible window. Vision models can see screenshots; text models should use strong_web.',
@@ -358,6 +358,9 @@ const EN = Object.freeze({
   ptcMode: 'PTC guidance', ptcModeHint: 'Adds short guidance for calling tools inside run_code: parallel reads, selected fields only, close the browser when done. Automatic detects run_code.',
   ptcOn: 'Always on', ptcOff: 'Off',
   browserPath: 'Browser executable (optional)', browserPathHint: 'Absolute path to chrome.exe, msedge.exe, or brave.exe. Leave empty to detect automatically.',
+  desktopTool: 'Desktop control (Windows)', desktopToolHint: 'Requires the expanded tool set. Adds strong_desktop: real global mouse and keyboard input, window control, program launch, and full-screen screenshots. Actions affect the live desktop and may be irreversible.',
+  desktopOn: 'strong_desktop is on: the model can control the live Windows desktop, including other applications. Review actions carefully; screenshots can contain anything visible on screen.',
+  desktopCompact: 'Desktop control is hidden while the compact tool set is selected. Switch to expanded to enable it.',
   shell: 'Shell tool', shellHint: 'When on, the model runs every shell command through strong_shell (Git Bash, WSL Bash, POSIX Bash, PowerShell, cmd, or the plugin’s built-in Bash): faster, with structured stdout/stderr/exitCode. It takes over from the host bash/pwsh/terminal tool; the DSH default-shell setting itself is unchanged.',
   shellEnable: 'Enable strong_shell', shellEnableHint: 'Adds strong_shell and makes it the model’s shell tool: the working directory starts inside this project, and commands inherit the DSH sandbox policy — full access only when this session itself is danger-full-access; otherwise writes outside the workspace are rejected, and a missing sandbox provider fails closed.',
   shellBackend: 'Shell backend', shellBackendHint: 'Automatic prefers Git Bash on Windows, then WSL, PowerShell, and cmd, and falls back to the built-in Bash. macOS and Linux use Bash, then the built-in Bash.',
@@ -396,7 +399,7 @@ const ZH = Object.freeze({
   model: '模型策略', modelHint: '所有模型均有通用增强，DeepSeek 可选专用指导；不切换实际模型。', pro: 'DeepSeek V4 Pro', flash: 'DeepSeek V4.1 Flash · 1017', generic: '通用增强',
   modelNote: '「自动」为支持的 DeepSeek 模型应用专用指导，其他模型保留全部通用增强。实际模型及推理参数请在「设置 → 模型」中选择。Flash 策略对应滚动更新的 deepseek-flash API 模型。',
   tools: '工具集', toolsHint: '扩展模式增加导航与检查工具；精简模式保留核心工具。', compact: '精简', expanded: '扩展',
-  network: '联网与浏览器', networkHint: '精简模式不加载这两个工具，扩展模式才加入；截图只给视觉模型看。',
+  network: '联网、浏览器与桌面', networkHint: '精简模式不加载这些工具，扩展模式才加入；浏览器截图只给视觉模型看。桌面操作需显式开启，发生在真实桌面上，可能不可逆。',
   webTool: '联网检索工具', webToolHint: '增加 strong_web：search 返回带 id、标题、网址和摘要的短 JSON；open 用 id 或网址读正文，不启动浏览器。',
   webAllowPrivate: '允许访问内网', webAllowPrivateHint: '默认关闭以防 SSRF：strong_web 会拒绝 localhost、内网、链路本地和云元数据地址。仅在确需读取本地或内网页面时开启。',
   browseTool: '浏览器工具', browseToolHint: '增加 strong_browse：真实的无头 Chrome/Edge，不显示窗口。视觉模型能直接看截图；文本模型请用 strong_web。',
@@ -404,6 +407,9 @@ const ZH = Object.freeze({
   ptcMode: 'PTC 引导', ptcModeHint: '宿主在 run_code 里调用工具时附加简短指导：并行读取、只取需要的字段、用完关闭浏览器。「自动」会检测 run_code。',
   ptcOn: '始终开启', ptcOff: '关闭',
   browserPath: '浏览器路径（可选）', browserPathHint: 'chrome.exe、msedge.exe 或 brave.exe 的绝对路径；留空自动探测。',
+  desktopTool: '桌面操作（Windows）', desktopToolHint: '需要扩展工具集。增加 strong_desktop：全局真实鼠标键盘、窗口控制、启动程序和全屏截图。操作作用于真实桌面，可能不可逆。',
+  desktopOn: 'strong_desktop 已开启：AI 可以操作真实 Windows 桌面，包括其他软件。请逐项确认操作；截图可能包含屏幕上的任何内容。',
+  desktopCompact: '精简工具集下不会加载桌面工具；切换到扩展工具集后才能启用。',
   shell: 'Shell 工具', shellHint: '开启后 AI 直接用 strong_shell 执行所有 shell 命令（Git Bash、WSL Bash、POSIX Bash、PowerShell、cmd 或插件自带内置 Bash）：更快、返回结构化 stdout/stderr/exitCode。工具选择上它会替代宿主 bash/pwsh/terminal；DSH 默认 shell 设置本身不变。',
   shellEnable: '启用 strong_shell', shellEnableHint: '增加 strong_shell 并作为 AI 的 shell 工具：工作目录从当前项目内开始，命令继承 DSH 沙箱策略——只有本会话本身是 danger-full-access 才全权，否则项目外写入会被拒绝，缺少可用沙箱时直接失败。',
   shellBackend: 'Shell 后端', shellBackendHint: '自动模式在 Windows 优先 Git Bash，其次 WSL、PowerShell、cmd，最后回退到内置 Bash；macOS 与 Linux 先用 Bash，再用内置 Bash。',
@@ -475,10 +481,10 @@ function createSettingsSection(h) {
         },
       }));
     }
-    function toggle(field, label, hint) {
+    function toggle(field, label, hint, isDisabled = disabled) {
       return row(field, label, hint, h('input', {
         id: fieldId(field), type: 'checkbox', role: 'switch', checked: value[field] === true,
-        disabled, 'aria-describedby': hintId(field),
+        disabled: isDisabled, 'aria-describedby': hintId(field),
         onChange: event => { void props.set(field, event.currentTarget.checked); },
       }));
     }
@@ -516,7 +522,10 @@ function createSettingsSection(h) {
         toggle('webAllowPrivate', 'webAllowPrivate', 'webAllowPrivateHint'),
         select('browseTool', 'browseTool', 'browseToolHint', [['auto', 'browseAuto'], ['on', 'browseOn'], ['off', 'browseOff']]),
         select('ptcMode', 'ptcMode', 'ptcModeHint', [['auto', 'auto'], ['on', 'ptcOn'], ['off', 'ptcOff']]),
-        text('browserPath', 'browserPath', 'browserPathHint', 1000, 'C:/Program Files/Google/Chrome/Application/chrome.exe')),
+        text('browserPath', 'browserPath', 'browserPathHint', 1000, 'C:/Program Files/Google/Chrome/Application/chrome.exe'),
+        toggle('desktopTool', 'desktopTool', 'desktopToolHint', disabled || value.toolSet === 'compact'),
+        value.desktopTool && value.toolSet === 'expanded' ? h('p', { className: 'strong-settings__notice', role: 'status' }, t('desktopOn')) : null,
+        value.toolSet === 'compact' ? h('p', { className: 'strong-settings__notice', role: 'status' }, t('desktopCompact')) : null),
       h('div', { className: 'strong-settings__group' },
         h('h3', null, t('shell')),
         h('p', { className: 'strong-settings__hint' }, t('shellHint')),

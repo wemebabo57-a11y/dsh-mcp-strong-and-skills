@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { resolveConfig } from '../src/config.mjs';
-import { createSettingsController, SETTINGS_FIELDS } from '../client/controller.mjs';
+import { createSettingsController, SETTINGS_FIELDS, validateSetting } from '../client/controller.mjs';
 import { createClientPlugin } from '../client/index.mjs';
 import { EN, ZH } from '../client/view.mjs';
 
@@ -400,6 +400,30 @@ test('optional shell starts off, explains native-tool separation, and enables de
   tree = ui.render();
   assert.equal(content(tree).includes(EN.shellOn), false);
   for (const field of ['shellBackend', 'shellPath', 'wslDistro']) assert.equal(control(tree, field).props.disabled, true, field);
+  ui.dispose();
+});
+
+test('desktop control starts off, is expanded-only, and warns before granting live desktop access', async () => {
+  const f = fixture();
+  const ui = pluginFixture(f.form);
+  let tree = ui.render();
+  assert.equal(control(tree, 'desktopTool').props.checked, false);
+  assert.equal(control(tree, 'desktopTool').props.disabled, false);
+  assert.ok(content(tree).includes(EN.desktopToolHint));
+  assert.equal(content(tree).includes(EN.desktopOn), false);
+  assert.throws(() => validateSetting('desktopTool', 'true'), /must be boolean/);
+  control(tree, 'desktopTool').props.onChange({ currentTarget: { checked: true } });
+  await tick();
+  assert.deepEqual(f.writes[0], { field: 'desktopTool', value: true });
+  tree = ui.render();
+  assert.equal(control(tree, 'desktopTool').props.checked, true);
+  assert.ok(content(tree).includes(EN.desktopOn));
+  control(tree, 'toolSet').props.onChange({ currentTarget: { value: 'compact' } });
+  await tick();
+  tree = ui.render();
+  assert.equal(control(tree, 'desktopTool').props.disabled, true);
+  assert.equal(content(tree).includes(EN.desktopOn), false);
+  assert.ok(content(tree).includes(EN.desktopCompact));
   ui.dispose();
 });
 

@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fitResult } from './budget.mjs';
+import { findTrustedExecutable } from './trusted-executable.mjs';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.nuxt', '.cache', '.npm-cache', '.turbo', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', 'target']);
 const BINARY_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.zip', '.gz', '.7z', '.exe', '.dll', '.so', '.woff', '.woff2', '.ttf', '.mp4', '.mp3', '.sqlite', '.db', '.lockb']);
@@ -84,9 +85,15 @@ function fitOutput(result, budget) {
 async function runGit(root, args, { signal, maxBytes = 1024 * 1024, timeoutMs = 10000 } = {}) {
   abortIfNeeded(signal);
   return new Promise((resolve, reject) => {
+    const git = findTrustedExecutable('git', { workspaceRoot: root });
+    if (!git) {
+      resolve({ code: -1, stdout: '', stderr: 'git executable not found outside the workspace', truncated: false });
+      return;
+    }
     let child;
     try {
-      child = spawn('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.quotePath=false', '-C', root, ...args], {
+      child = spawn(git, ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.quotePath=false', '-C', root, ...args], {
+        cwd: root,
         shell: false,
         windowsHide: true,
         // Ambient Git variables can redirect work trees/indexes, execute helper

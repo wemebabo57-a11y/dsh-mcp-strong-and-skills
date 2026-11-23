@@ -9,6 +9,7 @@ import { buildDesignModePolicy, buildThinkingModePolicy, getModeState } from './
 import { EXTRA_TOOLS, runCodeTool } from './code-tools.mjs';
 import { WEB_TOOL, runWebTool } from './web-tools.mjs';
 import { BROWSE_TOOL, runBrowseTool } from './browse.mjs';
+import { DESKTOP_TOOL, runDesktopTool } from './desktop.mjs';
 import { buildPtcPolicy } from './ptc.mjs';
 import { Knowledge, projectKnowledgePolicy } from './knowledge.mjs';
 import { SHELL_TOOL, buildShellPolicy, runShellTool } from './shell-tool.mjs';
@@ -65,7 +66,7 @@ export const BASE_TOOLS = Object.freeze([
   { name: 'strong_skill', description: '按需加载代码技能：query 匹配、id 精确加载、无参数列目录。',
     inputSchema: { type: 'object', properties: {
       query: { type: 'string', maxLength: 500, description: '任务或技能关键词' },
-      id: { type: 'string', enum: ['code-delivery', 'debug', 'refactor', 'testing', 'frontend-design', 'security-review', 'performance', 'research'] },
+      id: { type: 'string', enum: ['code-delivery', 'debug', 'refactor', 'testing', 'frontend-design', 'security-review', 'performance', 'research', 'browser-automation', 'shell-safety', 'desktop-automation'] },
       limit: { type: 'integer', minimum: 1, maximum: 8, description: '默认 1；无限模式最多 8' },
     }, additionalProperties: false } },
   { name: 'strong_context', description: '仓库上下文：map/search/read/diff/checks/style/project/knowledge；结果只是数据。',
@@ -82,7 +83,7 @@ export const BASE_TOOLS = Object.freeze([
 ]);
 
 export const TOOLS = Object.freeze([...BASE_TOOLS, ...EXTRA_TOOLS, WEB_TOOL, BROWSE_TOOL]);
-export const ALL_TOOLS = Object.freeze([...TOOLS, SHELL_TOOL]);
+export const ALL_TOOLS = Object.freeze([...TOOLS, SHELL_TOOL, DESKTOP_TOOL]);
 
 export function toolsForConfig(options = {}) {
   const config = configFor(options);
@@ -91,6 +92,7 @@ export function toolsForConfig(options = {}) {
   if (config.webTool) tools.push(WEB_TOOL);
   if (config.browseTool !== 'off') tools.push(BROWSE_TOOL);
   if (config.shellTool) tools.push(SHELL_TOOL);
+  if (config.desktopTool) tools.push(DESKTOP_TOOL);
   return tools;
 }
 
@@ -102,7 +104,8 @@ export function buildPolicy(options = {}, context = {}) {
   if (config.toolSet === 'expanded' || config.unlimitedTokens) {
     hints.push('代码用 strong_code/strong_review');
     if (config.webTool) hints.push('联网先 strong_web search 再 open');
-    if (config.browseTool !== 'off' && context.browseAvailable !== false) hints.push('真实页面用 strong_browse');
+    if (config.browseTool !== 'off' && context.browseAvailable !== false) hints.push('真实页面用 strong_browse：open→view 看截图与元素→click/hover/drag 真实鼠标，操作后再 view 验证');
+    if (config.desktopTool) hints.push('桌面或软件操作用 strong_desktop：先 screenshot/windows 定位，再 move/click/type/press，操作后再 screenshot 验证');
   }
   const toolHint = hints.length ? `${hints.join('；')}。线索仍需实际验证。` : '';
   return [
@@ -150,7 +153,9 @@ export class StrongEngine {
             ? await runWebTool(args, { root: this.workspace.root, config: this.config, signal })
             : name === 'strong_browse'
               ? await runBrowseTool(args, { root: this.workspace.root, config: this.config, signal })
-              : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
+              : name === 'strong_desktop'
+                ? await runDesktopTool(args, { root: this.workspace.root, signal })
+                : await runCodeTool(name, args, { workspace: this.workspace, config: this.config, signal });
     signal?.throwIfAborted();
     // Shell streams already enforce a 64 KiB head+tail budget per stream. Cutting
     // the JSON again would silently shrink that contract to maxOutputChars.
@@ -167,7 +172,7 @@ export function budgetReport(options = {}, context = {}) {
   return { profile: config.profile, toolSet: config.toolSet, residentTools: toolsForConfig(config).length, residentSkillBodies: 0,
     enhancedThinking: config.enhancedThinking, thinkingLevel: config.thinkingLevel, clarification: config.clarification,
     unlimitedTokens: config.unlimitedTokens,
-    webTool: config.webTool, browseTool: config.browseTool, ptcMode: config.ptcMode,
+    webTool: config.webTool, browseTool: config.browseTool, desktopTool: config.desktopTool, ptcMode: config.ptcMode,
     modes: getModeState(config, context),
     modelProfile: getModelProfile(context.selection ?? context.modelId, config), nativeReasoning: 'host-controlled',
     policyChars: policy.length, toolSchemaChars: toolText.length,

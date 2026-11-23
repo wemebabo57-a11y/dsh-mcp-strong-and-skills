@@ -3,6 +3,7 @@ import { SKILL_CATALOG, loadSkill } from './skills.mjs';
 import packageInfo from '../package.json' with { type: 'json' };
 import { parseKnowledgeConfig, librariesForRoot } from './knowledge-config.mjs';
 import { StringDecoder } from 'node:string_decoder';
+import { readFile, stat } from 'node:fs/promises';
 
 // A small, dependency-free stdio implementation of the negotiated MCP subset.
 // No HTTP listener, sampling, prompts, or subscriptions. The optional strong_shell
@@ -12,6 +13,23 @@ import { StringDecoder } from 'node:string_decoder';
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_IN_FLIGHT = 16;
+// Base64 inflates by 4/3; keep one image frame comfortably below the 1 MiB
+// transport budget so clients that enforce it still receive the picture.
+const MAX_IMAGE_BYTES = 620 * 1024;
+const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+async function imageContent(value) {
+  const screenshot = value?.screenshot;
+  if (!screenshot || typeof screenshot.path !== 'string' || !IMAGE_MEDIA_TYPES.has(screenshot.mediaType)) return null;
+  try {
+    const info = await stat(screenshot.path);
+    if (!info.isFile() || info.size > MAX_IMAGE_BYTES) return null;
+    const data = await readFile(screenshot.path);
+    return { type: 'image', data: data.toString('base64'), mimeType: screenshot.mediaType };
+  } catch {
+    return null;
+  }
+}
 
 export function startMcp({ root, config = {}, input = process.stdin, output = process.stdout }) {
   const engine = new StrongEngine(root, config);
@@ -47,15 +65,20 @@ export function startMcp({ root, config = {}, input = process.stdin, output = pr
       if (params?.cursor !== undefined) throw Object.assign(new Error('This static list has no cursor'), { rpcCode: -32602 });
       return { tools: tools.map(tool => ({ ...tool, annotations: tool.name === 'strong_shell'
         ? { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
-        : tool.name === 'strong_browse'
-          ? { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
-          : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: tool.name === 'strong_web' || (tool.name === 'strong_context' && remoteKnowledge) } })) };
+        : tool.name === 'strong_desktop'
+          ? { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+          : tool.name === 'strong_browse'
+            ? { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+            : { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: tool.name === 'strong_web' || (tool.name === 'strong_context' && remoteKnowledge) } })) };
     }
     if (method === 'tools/call') {
       if (!params || typeof params.name !== 'string' || !tools.some(tool => tool.name === params.name)) throw Object.assign(new Error('Unknown tool'), { rpcCode: -32602 });
       try {
         const value = await engine.call(params.name, Object.hasOwn(params, 'arguments') ? params.arguments : {}, { signal });
-        return { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false };
+        const content = [{ type: 'text', text: JSON.stringify(value) }];
+        const image = params.name === 'strong_browse' || params.name === 'strong_desktop' ? await imageContent(value) : null;
+        if (image) content.push(image);
+        return { content, isError: false };
       } catch (cause) {
         if (signal.aborted) throw cause;
         return { content: [{ type: 'text', text: String(cause.message ?? cause).slice(0, 1000) }], isError: true };

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SEARCH_BUDGET_MS, SEARCH_ENGINE_TIMEOUT_MS, WEB_TOOL, WEB_SEARCH_LIMIT, clearWebCache, decodeEntities, extractPage, parseBing, parseDuckDuckGo, raceEngines, runWebTool, unwrapBingUrl } from '../src/web-tools.mjs';
+import { SEARCH_BUDGET_MS, SEARCH_ENGINE_TIMEOUT_MS, WEB_TOOL, WEB_SEARCH_LIMIT, clearWebCache, decodeEntities, extractPage, parseBing, parseDuckDuckGo, raceEngines, runWebTool, setFetchTransport, setLookupTransport, unwrapBingUrl } from '../src/web-tools.mjs';
 
 function htmlResponse(html, { url = '', type = 'text/html; charset=utf-8' } = {}) {
   const response = new Response(html, { status: 200, headers: { 'content-type': type } });
@@ -26,14 +26,19 @@ const PAGE = [
   '</body></html>',
 ].join('');
 
+// The production transport connects to the address validated by DNS, so tests
+// must stub both seams. Fake engine domains resolve to one fixed public address.
+const STUB_LOOKUP = async () => [{ address: '93.184.216.34', family: 4 }];
+
 async function withFetch(stub, run) {
-  const original = globalThis.fetch;
-  globalThis.fetch = stub;
+  setFetchTransport(stub);
+  setLookupTransport(STUB_LOOKUP);
   clearWebCache();
   try {
     return await run();
   } finally {
-    globalThis.fetch = original;
+    setFetchTransport(null);
+    setLookupTransport(null);
     clearWebCache();
   }
 }

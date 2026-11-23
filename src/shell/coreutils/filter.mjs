@@ -415,7 +415,20 @@ function translateRegex(pattern, mode) {
 
   const repeat = (text) => {
     if (lastQuantified) {
-      out = out.slice(0, atomStart) + '(?:' + out.slice(atomStart) + ')' + text;
+      const segment = out.slice(atomStart);
+      const simple = /^(.*?)([*+?])$/.exec(segment);
+      if (simple && (text === '*' || text === '+' || text === '?')) {
+        const base = simple[1];
+        const previous = simple[2];
+        let next;
+        if (previous === '?' && text === '?') next = '?';
+        else if (previous === '+' && text === '+') next = '+';
+        else if (text === '+' && previous !== '*' && previous !== '?') next = '+';
+        else next = '*';
+        out = out.slice(0, atomStart) + base + next;
+      } else {
+        out = out.slice(0, atomStart) + '(?:' + segment + ')' + text;
+      }
     } else {
       out += text;
     }
@@ -736,7 +749,15 @@ function runGrep(args, ctx) {
     return null;
   }
 
-  function walkDir(vpath, display) {
+  function walkDir(vpath, display, active = null) {
+    const activeDirs = active || new Set();
+    let here;
+    try { here = fs.realpath(vpath, '/'); } catch { here = vpath; }
+    if (activeDirs.has(here)) {
+      reportFileError(display || vpath, 'ELOOP');
+      return null;
+    }
+    activeDirs.add(here);
     let entries;
     try {
       entries = fs.readdir(vpath, '/');
@@ -750,7 +771,7 @@ function runGrep(args, ctx) {
       const childDisplay = joinDisplayPath(display, entry.name);
       if (entry.isDir) {
         if (matchesAnyGlob(opts.excludeDir, entry.name)) continue;
-        const stop = walkDir(childVpath, childDisplay);
+        const stop = walkDir(childVpath, childDisplay, activeDirs);
         if (stop) return stop;
         continue;
       }
@@ -764,7 +785,7 @@ function runGrep(args, ctx) {
         }
         if (info.isDir) {
           if (entry.name === '.git' || matchesAnyGlob(opts.excludeDir, entry.name)) continue;
-          const stop = walkDir(childVpath, childDisplay);
+          const stop = walkDir(childVpath, childDisplay, activeDirs);
           if (stop) return stop;
           continue;
         }

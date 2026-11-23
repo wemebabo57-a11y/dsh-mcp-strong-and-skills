@@ -143,7 +143,7 @@ test('CLI rejects missing values and duplicate options', () => {
   assert.throws(() => parseArgs(['serve', '--root', '.', '--root', 'src']));
 });
 
-test('web, browser and builtin shell are opt-in and independently gated', () => {
+test('web, browser, desktop and builtin shell are opt-in and independently gated', () => {
   const names = list => list.map(tool => tool.name);
   assert.ok(names(TOOLS).includes('strong_web'));
   assert.ok(names(TOOLS).includes('strong_browse'));
@@ -151,6 +151,12 @@ test('web, browser and builtin shell are opt-in and independently gated', () => 
   assert.equal(names(toolsForConfig({ toolSet: 'compact', webTool: true })).includes('strong_web'), false);
   assert.equal(names(toolsForConfig({ webTool: false })).includes('strong_web'), false);
   assert.equal(names(toolsForConfig({ browseTool: 'off' })).includes('strong_browse'), false);
+  assert.equal(names(toolsForConfig()).includes('strong_desktop'), false);
+  assert.equal(names(toolsForConfig({ desktopTool: true })).includes('strong_desktop'), true);
+  assert.equal(names(toolsForConfig({ desktopTool: true, toolSet: 'compact' })).includes('strong_desktop'), false);
+  assert.equal(budgetReport({ desktopTool: true }).residentTools, 7);
+  assert.match(buildPolicy({ desktopTool: true }), /strong_desktop/);
+  assert.doesNotMatch(buildPolicy(), /strong_desktop/);
   assert.equal(names(toolsForConfig({ webTool: true, browseTool: 'auto', toolSet: 'expanded' })).filter(name => name === 'strong_web' || name === 'strong_browse').length, 2);
   assert.match(buildPolicy({}), /strong_web/);
   assert.match(buildPolicy({}), /strong_browse/);
@@ -159,5 +165,6 @@ test('web, browser and builtin shell are opt-in and independently gated', () => 
   assert.throws(() => resolveConfig({ browseTool: 'always' }), /browseTool/);
   assert.throws(() => resolveConfig({ ptcMode: 'always' }), /ptcMode/);
   assert.throws(() => resolveConfig({ webTool: 'yes' }), /webTool/);
+  assert.throws(() => resolveConfig({ desktopTool: 'yes' }), /desktopTool/);
   assert.throws(() => resolveConfig({ browserPath: 'x'.repeat(1001) }), /browserPath/);
 });

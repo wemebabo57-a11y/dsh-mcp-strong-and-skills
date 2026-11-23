@@ -114,7 +114,7 @@ test('optional mode flags round-trip through native and MCP configuration withou
   }
 });
 
-test('network, browser and PTC flags round-trip without hidden network calls', () => {
+test('network, browser, desktop and PTC flags round-trip without hidden network calls', () => {
   const args = ['--web', 'off', '--browse', 'off', '--ptc', 'off', '--browser-path', 'C:/Apps/chrome.exe'];
   const native = run(['config', '--mode', 'native', '--root', root, ...args]);
   assert.equal(native.status, 0, native.stderr);
@@ -135,6 +135,15 @@ test('network, browser and PTC flags round-trip without hidden network calls', (
   assert.equal(JSON.parse(budget.stdout).residentTools, 4);
   const withoutBrowser = run(['budget', '--web', 'on', '--browse', 'off']);
   assert.equal(JSON.parse(withoutBrowser.stdout).residentTools, 5);
+  const desktopNative = run(['config', '--mode', 'native', '--root', root, '--desktop', 'on']);
+  assert.equal(desktopNative.status, 0, desktopNative.stderr);
+  assert.match(desktopNative.stdout, /desktopTool: true/);
+  const desktopMcp = run(['config', '--mode', 'mcp', '--root', root, '--desktop', 'on']);
+  assert.equal(desktopMcp.status, 0, desktopMcp.stderr);
+  const desktopMcpArgs = JSON.parse(desktopMcp.stdout.match(/args: (.+)/)[1]);
+  assert.equal(desktopMcpArgs[desktopMcpArgs.lastIndexOf('--desktop') + 1], 'on');
+  assert.equal(JSON.parse(run(['budget', '--desktop', 'on']).stdout).residentTools, 7);
+  assert.match(run(['config', '--mode', 'native', '--root', root, '--desktop', 'off']).stdout, /desktopTool: false/);
   const privateNative = run(['config', '--mode', 'native', '--root', root, '--web-private', 'on']);
   assert.equal(privateNative.status, 0, privateNative.stderr);
   assert.match(privateNative.stdout, /webAllowPrivate: true/);

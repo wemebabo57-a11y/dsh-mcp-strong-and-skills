@@ -1,6 +1,7 @@
 // Coreutils: filesystem inspection and mutation (ls/mkdir/rm/cp/mv/touch/ln/chmod/stat/readlink/du/env/uname).
 // Synchronous, zero runtime dependencies.
 import fsSync from 'node:fs';
+import pathNode from 'node:path';
 import os from 'node:os';
 import { formatError, usageError, parseOptions, toInt } from '../io.mjs';
 
@@ -196,11 +197,32 @@ function plainLine(name, info, opts) {
   return label;
 }
 
+function displayLinkTarget(ctx, host, raw) {
+  // Relative targets are stored verbatim. A Windows drive/UNC target is a host
+  // path outside the virtual tree, so never echo it; map it back when possible.
+  if (!pathNode.isAbsolute(raw)) return raw;
+  if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
+    const virtual = ctx.fs.virtual(raw);
+    if (virtual && !virtual.startsWith('/..')) return virtual;
+    return pathNode.basename(raw);
+  }
+  // A POSIX-style absolute target can be either a virtual shell path (on
+  // Windows) or a host path (on POSIX). Prefer the virtual view when it maps
+  // inside the workspace; otherwise return only the basename so the host root
+  // is never exposed.
+  if (process.platform !== 'win32') {
+    const virtual = ctx.fs.virtual(raw);
+    if (virtual && !virtual.startsWith('/..')) return virtual;
+    return pathNode.basename(raw);
+  }
+  return raw;
+}
+
 function readLinkTarget(ctx, vpath) {
   try {
-    const entry = ctx.fs.resolve(vpath, cwdOf(ctx));
+    const entry = ctx.fs.resolve(vpath, cwdOf(ctx), { followFinal: false });
     if (!entry || entry.device) return null;
-    return fsSync.readlinkSync(entry.host);
+    return displayLinkTarget(ctx, entry.host, fsSync.readlinkSync(entry.host));
   } catch {
     return null;
   }
@@ -216,7 +238,9 @@ function entryInfo(ctx, vpath) {
   return info;
 }
 
-function listDirectory(ctx, dir, opts, emit, header) {
+function listDirectory(ctx, dir, opts, emit, header, visited = null) {
+  const seen = visited || new Set();
+  try { seen.add(ctx.fs.realpath(dir, cwdOf(ctx))); } catch { seen.add(dir); }
   const items = [];
   let entries;
   try {
@@ -259,8 +283,14 @@ function listDirectory(ctx, dir, opts, emit, header) {
     for (const item of sorted) {
       if (!item.info.isDir || item.name === '.' || item.name === '..') continue;
       const child = joinPath(dir, item.name);
+      let key = child;
+      try { key = ctx.fs.realpath(child, cwdOf(ctx)); } catch { /* keep virtual path */ }
+      if (seen.has(key)) {
+        emit.error('ls: ' + child + ': recursive directory loop\n');
+        continue;
+      }
       emit.out('\n');
-      listDirectory(ctx, child, opts, emit, child);
+      listDirectory(ctx, child, opts, emit, child, seen);
     }
   }
   return 0;
@@ -536,6 +566,9 @@ function cpMain(ctx, argv) {
     parsed.opts.get('a') || parsed.opts.get('archive'));
   const verbose = !!(parsed.opts.get('v') || parsed.opts.get('verbose'));
   const noClobber = !!(parsed.opts.get('n') || parsed.opts.get('no-clobber'));
+  const update = !!(parsed.opts.get('u') || parsed.opts.get('update'));
+  const dereference = !!(parsed.opts.get('L') || parsed.opts.get('a') || parsed.opts.get('archive'));
+  const preserveTimestamps = !!(parsed.opts.get('p') || parsed.opts.get('preserve') || parsed.opts.get('a') || parsed.opts.get('archive'));
   const targetDir = parsed.opts.get('t') || parsed.opts.get('target-directory');
   let sources = parsed.args.slice();
   let dest = targetDir || null;
@@ -565,6 +598,10 @@ function cpMain(ctx, argv) {
     const target = destIsDir ? joinPath(dest, baseName(source)) : dest;
     if (noClobber && safeLstat(ctx, target)) continue;
     const sourceResolved = safeStat(ctx, source);
+    if (update) {
+      const existing = safeStat(ctx, target);
+      if (existing && sourceResolved && sourceResolved.mtimeMs <= existing.mtimeMs) continue;
+    }
     const targetParent = dirName(target);
     const parentInfo = safeStat(ctx, targetParent === '.' ? '.' : targetParent);
     if (!parentInfo) { errs.push(errorText('cp', target, 'ENOENT', 'No such file or directory')); status = 1; continue; }
@@ -574,19 +611,49 @@ function cpMain(ctx, argv) {
       continue;
     }
     try {
-      ctx.fs.copy(source, target, cwdOf(ctx), { recursive: true });
+      ctx.fs.copy(source, target, cwdOf(ctx), { recursive: true, dereference, preserveTimestamps });
     } catch (error) {
       errs.push(errorText('cp', source, error.code || 'EINVAL'));
       status = 1;
       continue;
     }
     if (verbose) out.push(quote(source) + ' -> ' + quote(target) + '\n');
-    void sourceResolved;
   }
   return { code: status, out: out.join(''), err: errs.join('') };
 }
 
 /* ----------------------------------------------------------------------- mv */
+
+function mergeMoveTree(ctx, source, target) {
+  const cwd = cwdOf(ctx);
+  const targetInfo = safeLstat(ctx, target);
+  if (!targetInfo) { ctx.fs.copy(source, target, cwd, { recursive: true }); return; }
+  if (!targetInfo.isDir || targetInfo.isSymlink) {
+    throw Object.assign(new Error('cannot overwrite non-directory with directory'), { code: 'EISDIR' });
+  }
+  for (const entry of ctx.fs.readdir(source, cwd)) {
+    const from = joinPath(source, entry.name);
+    const to = joinPath(target, entry.name);
+    const fromInfo = safeLstat(ctx, from);
+    const toInfo = safeLstat(ctx, to);
+    if (fromInfo && fromInfo.isDir && !fromInfo.isSymlink) {
+      mergeMoveTree(ctx, from, to);
+      continue;
+    }
+    if (toInfo && (toInfo.isDir && !toInfo.isSymlink)) {
+      throw Object.assign(new Error('cannot overwrite directory with non-directory'), { code: 'EISDIR' });
+    }
+    if (toInfo) ctx.fs.remove(to, cwd, { force: true });
+    if (fromInfo && fromInfo.isSymlink) {
+      const original = ctx.fs.resolve(from, cwd);
+      const destination = ctx.fs.assertWritable(to, cwd);
+      const followed = safeStat(ctx, from);
+      fsSync.symlinkSync(fsSync.readlinkSync(original.host), destination.host, followed && followed.isDir ? 'dir' : 'file');
+    } else {
+      ctx.fs.copy(from, to, cwd, { recursive: false });
+    }
+  }
+}
 
 function mvMain(ctx, argv) {
   const parsed = parseOptions(argv, {
@@ -626,10 +693,22 @@ function mvMain(ctx, argv) {
       moved = true;
     } catch (error) {
       const code = error && error.code ? error.code : 'EINVAL';
-      if (code === 'EXDEV' || code === 'EEXIST' || code === 'EPERM') {
+      if (code === 'EXDEV' || code === 'EEXIST' || code === 'EPERM' || code === 'ENOTEMPTY') {
         try {
-          if (safeLstat(ctx, target)) ctx.fs.remove(target, cwdOf(ctx), { recursive: true, force: true });
-          ctx.fs.copy(source, target, cwdOf(ctx), { recursive: true });
+          const sourceInfo = probedSource.info;
+          const targetInfo = safeLstat(ctx, target);
+          if (targetInfo && targetInfo.isDir && !targetInfo.isSymlink) {
+            if (!sourceInfo.isDir || sourceInfo.isSymlink) {
+              throw Object.assign(new Error('cannot overwrite directory with non-directory'), { code: 'EISDIR' });
+            }
+            mergeMoveTree(ctx, source, target);
+          } else {
+            if (targetInfo && sourceInfo.isDir && !sourceInfo.isSymlink) {
+              throw Object.assign(new Error('cannot overwrite non-directory with directory'), { code: 'EISDIR' });
+            }
+            if (targetInfo) ctx.fs.remove(target, cwdOf(ctx), { force: true });
+            ctx.fs.copy(source, target, cwdOf(ctx), { recursive: true });
+          }
           ctx.fs.remove(source, cwdOf(ctx), { recursive: true, force: true });
           moved = true;
         } catch (inner) {
@@ -650,6 +729,30 @@ function mvMain(ctx, argv) {
 
 /* -------------------------------------------------------------------- touch */
 
+function parseTouchTimestamp(text) {
+  const match = /^(\d{8}|\d{10}|\d{12})(?:\.(\d{2}))?$/.exec(text);
+  if (!match) return null;
+  const digits = match[1];
+  const second = match[2] ? Number(match[2]) : 0;
+  if (second > 59) return null;
+  let year;
+  let rest;
+  if (digits.length === 8) { year = new Date().getFullYear(); rest = digits; }
+  else if (digits.length === 10) {
+    const short = Number(digits.slice(0, 2));
+    year = short >= 69 ? 1900 + short : 2000 + short;
+    rest = digits.slice(2);
+  } else { year = Number(digits.slice(0, 4)); rest = digits.slice(4); }
+  const month = Number(rest.slice(0, 2));
+  const day = Number(rest.slice(2, 4));
+  const hour = Number(rest.slice(4, 6));
+  const minute = Number(rest.slice(6, 8));
+  const stamp = new Date(year, month - 1, day, hour, minute, second);
+  if (stamp.getFullYear() !== year || stamp.getMonth() !== month - 1 || stamp.getDate() !== day ||
+      stamp.getHours() !== hour || stamp.getMinutes() !== minute || stamp.getSeconds() !== second) return null;
+  return stamp;
+}
+
 function touchMain(ctx, argv) {
   const parsed = parseOptions(argv, {
     a: 'bool', m: 'bool', c: 'bool', t: 'value', d: 'value', r: 'value',
@@ -662,7 +765,23 @@ function touchMain(ctx, argv) {
   if (!parsed.args.length) return usageError('touch', 'missing file operand');
   const errs = [];
   let status = 0;
-  const now = Date.now();
+  let stamp = new Date();
+  const dateValue = parsed.opts.get('d') ?? parsed.opts.get('date');
+  const stampValue = parsed.opts.get('t');
+  const referenceValue = parsed.opts.get('r') ?? parsed.opts.get('reference');
+  if (dateValue !== undefined) {
+    const parsedDate = new Date(dateValue);
+    if (Number.isNaN(parsedDate.getTime())) return { code: 1, out: '', err: `touch: invalid date format '${dateValue}'\n` };
+    stamp = parsedDate;
+  } else if (stampValue !== undefined) {
+    const parsedStamp = parseTouchTimestamp(stampValue);
+    if (!parsedStamp) return { code: 1, out: '', err: `touch: invalid date format '${stampValue}'\n` };
+    stamp = parsedStamp;
+  } else if (referenceValue !== undefined) {
+    const reference = safeStat(ctx, referenceValue);
+    if (!reference) return { code: 1, out: '', err: errorText('touch', referenceValue, 'ENOENT') };
+    stamp = new Date(reference.mtimeMs);
+  }
   for (const operand of parsed.args) {
     check(ctx);
     const info = safeLstat(ctx, operand);
@@ -679,7 +798,6 @@ function touchMain(ctx, argv) {
     try {
       const entry = ctx.fs.assertWritable(operand, cwdOf(ctx));
       if (entry && entry.host) {
-        const stamp = new Date(now);
         const atime = onlyMtime ? undefined : stamp;
         const mtime = onlyAtime ? undefined : stamp;
         if (atime && mtime) fsSync.utimesSync(entry.host, atime, mtime);
@@ -719,8 +837,14 @@ function lnMain(ctx, argv) {
   for (const source of sources) {
     check(ctx);
     const target = destIsDir ? joinPath(dest, baseName(source)) : dest;
-    if (force && safeLstat(ctx, target)) {
-      try { ctx.fs.remove(target, cwdOf(ctx), { recursive: true, force: true }); } catch { /* ignore */ }
+    const existing = safeLstat(ctx, target);
+    if (existing && existing.isDir && !existing.isSymlink) {
+      errs.push(errorText('ln', target, 'EISDIR', 'cannot overwrite directory'));
+      status = 1;
+      continue;
+    }
+    if (force && existing) {
+      try { ctx.fs.remove(target, cwdOf(ctx), { force: true }); } catch { /* ignore */ }
     }
     try {
       const from = ctx.fs.resolve(source, cwdOf(ctx));
@@ -728,7 +852,11 @@ function lnMain(ctx, argv) {
       if (!from || from.device || !to || to.device) throw Object.assign(new Error('invalid path'), { code: 'EINVAL' });
       if (symbolic) {
         const info = safeStat(ctx, source);
-        fsSync.symlinkSync(from.host, to.host, info && info.isDir ? 'dir' : 'file');
+        // Relative targets are stored verbatim (so they keep resolving from the
+        // link's new location); virtual absolute targets must be mapped to their
+        // host path for the OS, then displayLinkTarget maps them back.
+        const linkTarget = pathNode.isAbsolute(source) ? from.host : source;
+        fsSync.symlinkSync(linkTarget, to.host, info && info.isDir ? 'dir' : 'file');
       } else {
         fsSync.linkSync(from.host, to.host);
       }
@@ -922,8 +1050,8 @@ function readlinkMain(ctx, argv) {
         const info = safeLstat(ctx, operand);
         if (!info) { errs.push(errorText('readlink', operand, 'ENOENT')); status = 1; continue; }
         if (!info.isSymlink) { status = 1; continue; }
-        const entry = ctx.fs.resolve(operand, cwdOf(ctx));
-        value = fsSync.readlinkSync(entry.host);
+        const entry = ctx.fs.resolve(operand, cwdOf(ctx), { followFinal: false });
+        value = displayLinkTarget(ctx, entry.host, fsSync.readlinkSync(entry.host));
       }
     } catch (error) {
       errs.push(errorText('readlink', operand, error.code || 'EINVAL'));

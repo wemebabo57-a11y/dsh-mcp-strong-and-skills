@@ -1,5 +1,8 @@
-import { lookup } from 'node:dns/promises';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import { isIP } from 'node:net';
+import { Readable } from 'node:stream';
 import { WorkspaceError } from './workspace.mjs';
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -19,6 +22,71 @@ const TRACKING = /^(utm_|fbclid$|gclid$|spm$|ref$|source$)/i;
 // run concurrently, so each engine gets a shorter cap while the whole search keeps a
 // hard budget that a stalled engine cannot exceed.
 const REQUEST_TIMEOUT_MS = 15000;
+
+// Tests replace these seams; production uses a transport that connects to the
+// exact address resolved and validated by resolvePublicAddress(). Fetching the
+// hostname again would reopen the DNS-rebinding TOCTOU window.
+let fetchTransport = null;
+let lookupTransport = null;
+
+export function setFetchTransport(fn) {
+  fetchTransport = typeof fn === 'function' ? fn : null;
+}
+
+export function setLookupTransport(fn) {
+  lookupTransport = typeof fn === 'function' ? fn : null;
+}
+
+async function lookupAddresses(host) {
+  if (lookupTransport) return lookupTransport(host);
+  return dnsLookup(host, { all: true, verbatim: true });
+}
+
+function responseHeaders(raw) {
+  const headers = new Headers();
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    try { headers.append(raw[i], raw[i + 1]); } catch { /* invalid header name */ }
+  }
+  return headers;
+}
+
+function pinnedFetch(input, { method = 'GET', headers = {}, body = null, signal, address = null, family = 0 } = {}) {
+  const url = input instanceof URL ? input : new URL(input);
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    const options = {
+      protocol: url.protocol,
+      hostname,
+      port: url.port || undefined,
+      path: url.pathname + url.search,
+      method,
+      headers,
+      signal,
+    };
+    if (address) {
+      options.lookup = (name, opts, callback) => {
+        if (opts && opts.all) callback(null, [{ address, family }]);
+        else callback(null, address, family);
+      };
+    }
+    if (url.protocol === 'https:' && !isIP(hostname)) options.servername = hostname;
+    const req = transport.request(options, res => {
+      const status = res.statusCode ?? 0;
+      const bodyStream = status === 204 || status === 304 ? null : Readable.toWeb(res);
+      const response = new Response(bodyStream, {
+        status,
+        statusText: res.statusMessage ?? '',
+        headers: responseHeaders(res.rawHeaders),
+      });
+      try { Object.defineProperty(response, 'finalUrl', { value: url.toString(), enumerable: false }); } catch { /* frozen response */ }
+      resolve(response);
+    });
+    req.on('error', reject);
+    if (body !== null && body !== undefined) req.write(body);
+    req.end();
+  });
+}
 export const SEARCH_ENGINE_TIMEOUT_MS = 4000;
 export const SEARCH_BUDGET_MS = 8000;
 
@@ -208,12 +276,16 @@ function privateIpv4(value) {
   const [a, b] = parts;
   return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127)
     || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
-    || (a === 192 && b === 0) || a >= 224;
+    // 192.0.0.0/24 and 192.0.2.0/24 (documentation) are covered by b === 0.
+    || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
 }
 
 function privateIpv6(value) {
   const address = value.toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
   if (address === '::' || address === '::1') return true;
+  // NAT64 well-known prefix 64:ff9b::/96 (and the local-use 64:ff9b:1::/48)
+  // embed an IPv4 address that can be private.
+  if (address.startsWith('64:ff9b:')) return true;
   // IPv4-compatible IPv6 (::/96) can encode loopback or private IPv4.
   if (address.startsWith('::')) return true;
   const compatible = /^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/.exec(address);
@@ -226,8 +298,15 @@ function privateIpv6(value) {
   return address.startsWith('fc') || address.startsWith('fd') || /^fe[89ab]/.test(address) || address.startsWith('ff');
 }
 
-async function assertPublicUrl(url, allowPrivate) {
-  if (allowPrivate) return;
+export async function assertPublicUrl(url, allowPrivate) {
+  return resolvePublicAddress(url, allowPrivate);
+}
+
+// Resolve once, validate every returned address, and return the exact address the
+// caller must connect to. A second resolution inside fetch allowed an attacker to
+// answer public first and private second (DNS rebinding).
+async function resolvePublicAddress(url, allowPrivate) {
+  if (allowPrivate) return null;
   const host = url.hostname.toLowerCase().replace(/\.$/, '');
   if (!host || host === 'localhost' || host.endsWith('.localhost') || host === 'metadata.google.internal') {
     throw new WorkspaceError('WEB_BLOCKED_URL', '默认拒绝本机、内网和元数据地址：' + url.hostname);
@@ -236,18 +315,24 @@ async function assertPublicUrl(url, allowPrivate) {
   const version = isIP(bare);
   if (version === 4 && privateIpv4(bare)) throw new WorkspaceError('WEB_BLOCKED_URL', '默认拒绝内网地址：' + url.hostname);
   if (version === 6 && privateIpv6(bare)) throw new WorkspaceError('WEB_BLOCKED_URL', '默认拒绝内网地址：' + url.hostname);
-  if (version) return;
+  if (version) return { address: bare, family: version };
+  let addresses;
   try {
-    const addresses = await lookup(host, { all: true, verbatim: true });
-    for (const item of addresses) {
-      if ((item.family === 4 && privateIpv4(item.address)) || (item.family === 6 && privateIpv6(item.address))) {
-        throw new WorkspaceError('WEB_BLOCKED_URL', '默认拒绝解析到内网的地址：' + url.hostname);
-      }
-    }
+    addresses = await lookupAddresses(host);
   } catch (error) {
-    if (error instanceof WorkspaceError) throw error;
-    // DNS failures surface through fetch; do not turn temporary resolver issues into SSRF bypass logic.
+    // Fail closed: a resolver failure must not silently downgrade to an
+    // unchecked hostname lookup inside the HTTP client.
+    throw new WorkspaceError('WEB_HTTP_FAILED', '无法解析域名：' + url.hostname + (error?.code ? ' (' + error.code + ')' : ''));
   }
+  if (!Array.isArray(addresses) || addresses.length === 0) {
+    throw new WorkspaceError('WEB_HTTP_FAILED', '域名没有可用地址：' + url.hostname);
+  }
+  for (const item of addresses) {
+    if ((item.family === 4 && privateIpv4(item.address)) || (item.family === 6 && privateIpv6(item.address))) {
+      throw new WorkspaceError('WEB_BLOCKED_URL', '默认拒绝解析到内网的地址：' + url.hostname);
+    }
+  }
+  return { address: addresses[0].address, family: addresses[0].family };
 }
 
 async function request(url, { method = 'GET', body = null, signal, allowPrivate = false, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
@@ -257,12 +342,15 @@ async function request(url, { method = 'GET', body = null, signal, allowPrivate 
   let currentMethod = method;
   let currentBody = body;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-    await assertPublicUrl(current, allowPrivate);
+    const resolved = await assertPublicUrl(current, allowPrivate);
     combined.throwIfAborted();
-    const response = await fetch(current, {
+    const fetchImpl = fetchTransport ?? pinnedFetch;
+    const response = await fetchImpl(current, {
       method: currentMethod,
       signal: combined,
       redirect: 'manual',
+      address: resolved?.address ?? null,
+      family: resolved?.family ?? 0,
       headers: {
         'user-agent': USER_AGENT,
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -271,6 +359,7 @@ async function request(url, { method = 'GET', body = null, signal, allowPrivate 
       body: currentBody,
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
+      try { await response.body?.cancel(); } catch { /* body already consumed or absent */ }
       const location = response.headers.get('location');
       if (!location) throw new WorkspaceError('WEB_HTTP_FAILED', '重定向缺少 Location：' + current);
       const next = new URL(location, current);
@@ -482,12 +571,15 @@ async function search(query, limit, signal, { root = '', allowPrivate = false } 
 export function extractPage(html, base) {
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '';
   const description = /<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i.exec(html)?.[1] ?? '';
+  // An unclosed <script>/<style>/<noscript>/<svg> used to leak its contents into
+  // the extracted text because only paired tags were stripped. Strip from the
+  // opening tag to its closing tag, or to the end of the document.
   const cleaned = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-    .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ');
+    .replace(/<script\b[^>]*>[\s\S]*?(?:<\/script\s*>|$)/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?(?:<\/style\s*>|$)/gi, ' ')
+    .replace(/<noscript\b[^>]*>[\s\S]*?(?:<\/noscript\s*>|$)/gi, ' ')
+    .replace(/<svg\b[^>]*>[\s\S]*?(?:<\/svg\s*>|$)/gi, ' ')
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ');
   const text = stripTags(cleaned);
   const links = [];
   for (const match of cleaned.matchAll(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)) {
@@ -534,9 +626,10 @@ async function open(target, maxChars, signal, allowPrivate) {
   const contentType = response.headers.get('content-type') ?? '';
   if (!/html|xml|text/i.test(contentType)) throw new WorkspaceError('WEB_NOT_HTML', '该地址不是网页文本：' + contentType);
   const body = await readText(response);
-  const page = extractPage(body, response.url || value);
+  const finalUrl = response.finalUrl || response.url || value;
+  const page = extractPage(body, finalUrl);
   const stored = {
-    url: response.url || value,
+    url: finalUrl,
     title: page.title,
     description: page.description,
     text: page.text,

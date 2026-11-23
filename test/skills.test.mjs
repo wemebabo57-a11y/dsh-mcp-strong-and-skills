@@ -12,7 +12,7 @@ test('catalog and unmatched queries expose metadata without loading skill bodies
   for (const args of [{}, { query: '' }, { query: '   ' }, { query: 'aardvark telescope porcelain' }]) {
     const result = await engine.call('strong_skill', args);
     assert.deepEqual(result.skills, SKILL_CATALOG);
-    assert.equal(result.skills.length, 8);
+    assert.equal(result.skills.length, 11);
     for (const skill of result.skills) {
       assert.deepEqual(Object.keys(skill).sort(), ['description', 'id']);
       assert.equal(Object.hasOwn(skill, 'content'), false);
@@ -44,6 +44,9 @@ const routingCases = [
   ['安全漏洞鉴权权限注入', 'security-review'],
   ['测量性能瓶颈、内存与延迟', 'performance'],
   ['调研官方文档资料和版本兼容', 'research'],
+  ['用浏览器打开网页截图并点击按钮', 'browser-automation'],
+  ['执行 shell 命令注意超时和引号', 'shell-safety'],
+  ['桌面窗口鼠标键盘操作软件', 'desktop-automation'],
   ['IMPLEMENT a new API feature', 'code-delivery'],
   ['Debug a crash and fix the error', 'debug'],
   ['Refactor a module for migration', 'refactor'],
@@ -52,6 +55,9 @@ const routingCases = [
   ['Security auth vulnerability injection', 'security-review'],
   ['Performance latency memory benchmark', 'performance'],
   ['Research documentation version compatibility', 'research'],
+  ['Browser screenshot and click a webpage button', 'browser-automation'],
+  ['Shell command timeout quoting sandbox', 'shell-safety'],
+  ['Desktop mouse keyboard window application', 'desktop-automation'],
 ];
 
 test('Chinese and English task queries route to the most relevant skill', async t => {

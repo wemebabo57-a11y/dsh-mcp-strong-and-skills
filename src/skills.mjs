@@ -9,6 +9,9 @@ const ROUTES = [
   ['security-review', '按需审查输入、权限与敏感数据边界', ['安全', '漏洞', '鉴权', '权限', '注入', 'security', 'auth', 'vulnerability', 'injection']],
   ['performance', '测量瓶颈、性能与资源消耗', ['性能', '优化', '瓶颈', '内存', '延迟', '慢', 'performance', 'optimize', 'latency', 'memory', 'benchmark']],
   ['research', '官方资料、版本兼容与技术选型', ['资料', '文档', '研究', '选型', '兼容', '版本', '调研', 'research', 'docs', 'documentation', 'compatibility', 'version']],
+  ['browser-automation', '真实浏览器页面查看、截图、鼠标与键盘操作', ['浏览器', '网页', '截图', '点击', '鼠标', '拖拽', '表单', '自动化', 'browser', 'webpage', 'screenshot', 'click', 'mouse', 'drag', 'form', 'automation', 'chromium']],
+  ['shell-safety', '命令执行的最小权限、引用、超时与路径边界', ['shell', 'bash', '命令', '终端', '超时', '引号', '沙箱', '进程', 'command', 'terminal', 'timeout', 'quoting', 'sandbox', 'spawn']],
+  ['desktop-automation', 'Windows 桌面与软件的真实鼠标、键盘、窗口和截图操作', ['桌面', '窗口', '软件', '应用', '全局', '鼠标', '键盘', '屏幕', '截屏', 'desktop', 'window', 'application', 'global', 'mouse', 'keyboard', 'screen', 'monitor']],
 ];
 
 export const SKILL_CATALOG = Object.freeze(ROUTES.map(([id, description]) => Object.freeze({ id, description })));

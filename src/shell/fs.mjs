@@ -92,15 +92,67 @@ export function createFs(options = {}) {
   try { rootReal = fsSync.realpathSync.native(rootHost); } catch { rootReal = rootHost; }
   const mode = options.mode ?? 'unconfined';
   const readOnly = mode === 'read-only';
+  // Only successful realpaths are cached: caching a miss lets a directory that
+  // is created later (or swapped for a junction) keep resolving to its stale
+  // pre-creation state. Every mutation clears the cache before and after.
   const realCache = new Map();
 
+  function cacheKey(host) {
+    return isWindows ? host.toLowerCase() : host;
+  }
+
   function realOf(host) {
-    const cached = realCache.get(host);
-    if (cached !== undefined) return cached;
+    const key = cacheKey(host);
+    if (realCache.has(key)) return realCache.get(key);
     let value = null;
     try { value = fsSync.realpathSync.native(host); } catch { value = null; }
-    if (realCache.size < 4096) realCache.set(host, value);
+    if (value !== null && realCache.size < 4096) realCache.set(key, value);
     return value;
+  }
+
+  function clearRealCache() {
+    realCache.clear();
+  }
+
+  function withFreshCache(fn) {
+    clearRealCache();
+    try { return fn(); } finally { clearRealCache(); }
+  }
+
+  const mutating = fn => (...args) => withFreshCache(() => fn(...args));
+
+  // Verify the nearest existing ancestor through realpath. A lexical fallback
+  // would accept a pre-existing junction as soon as two path components are
+  // missing, so every missing trailing component is checked here instead.
+  function assertAncestorInside(host, vpath) {
+    let probe = host;
+    for (let depth = 0; depth < 128; depth++) {
+      let info;
+      try { info = fsSync.lstatSync(probe); } catch { info = null; }
+      if (info) {
+        const real = realOf(probe);
+        if (!real || !inside(rootReal, real)) throw new ShellError('EOUTSIDE', vpath);
+        return;
+      }
+      const parent = path.dirname(probe);
+      if (parent === probe) throw new ShellError('EOUTSIDE', vpath);
+      probe = parent;
+    }
+    throw new ShellError('EOUTSIDE', vpath);
+  }
+
+  // Follow a chain of symlinks even when the final target does not exist yet.
+  function followLinkChain(host, vpath) {
+    let cursor = host;
+    for (let depth = 0; depth < 40; depth++) {
+      let info;
+      try { info = fsSync.lstatSync(cursor); } catch { return cursor; }
+      if (!info.isSymbolicLink()) return cursor;
+      let target;
+      try { target = fsSync.readlinkSync(cursor); } catch { return cursor; }
+      cursor = path.resolve(path.dirname(cursor), target);
+    }
+    throw new ShellError('ELOOP', vpath);
   }
 
   function assertWritable(vpath) {
@@ -128,9 +180,12 @@ export function createFs(options = {}) {
       relative = value.slice(1);
     } else if (/^[A-Za-z]:\//.test(value)) {
       const host = path.resolve(value);
-      const real = realOf(host) ?? realOf(path.dirname(host));
-      const target = real ?? host;
-      if (!inside(rootReal, target) && !inside(rootHost, target)) throw new ShellError('EOUTSIDE', host);
+      const real = realOf(host);
+      if (real) {
+        if (!inside(rootReal, real)) throw new ShellError('EOUTSIDE', host);
+      } else {
+        assertAncestorInside(host, host);
+      }
       return { host, vpath: virtual(host) };
     }
     const base = absolute ? [] : splitPath(cwd);
@@ -149,35 +204,23 @@ export function createFs(options = {}) {
     if (!followFinal) {
       try { finalLink = fsSync.lstatSync(host).isSymbolicLink(); } catch { finalLink = false; }
     }
-    // A final link may be exempt from the target check for unlink/rename, but
-    // its containing directory must still be inside the workspace.
-    if (segments.length) {
-      const parentReal = realOf(path.dirname(host));
-      if (parentReal && !inside(rootReal, parentReal)) throw new ShellError('EOUTSIDE', vpath);
-    }
+    // Removing or renaming the final symlink itself never follows it, so that
+    // one component may point outside. Its parent is still verified.
+    const exemptFinal = finalLink && !followFinal;
+    if (segments.length) assertAncestorInside(path.dirname(host), vpath);
     if (real) {
-      // Removing or renaming the final symlink does not follow it, so a link
-      // that points outside the workspace may still be unlinked. Ancestors are
-      // always verified; only the last component may be exempted.
-      if (!finalLink && !inside(rootReal, real)) throw new ShellError('EOUTSIDE', vpath);
-    } else if (!finalLink) {
-      // A dangling final symlink has no realpath; follow the link chain textually
-      // so a write cannot create its target outside the workspace.
-      let cursor = host;
-      let targetPath = '';
-      for (let depth = 0; depth < 40; depth++) {
-        let info;
-        try { info = fsSync.lstatSync(cursor); } catch { break; }
-        if (!info.isSymbolicLink()) { targetPath = cursor; break; }
-        let target;
-        try { target = fsSync.readlinkSync(cursor); } catch { break; }
-        cursor = path.resolve(path.dirname(cursor), target);
-        targetPath = cursor;
+      if (!exemptFinal && !inside(rootReal, real)) throw new ShellError('EOUTSIDE', vpath);
+    } else if (!exemptFinal) {
+      // No realpath means the path (or a trailing link target) does not exist.
+      // Follow any dangling link, then require the nearest existing ancestor of
+      // the final target to resolve inside the workspace.
+      const targetPath = followLinkChain(host, vpath);
+      const targetReal = realOf(targetPath);
+      if (targetReal) {
+        if (!inside(rootReal, targetReal)) throw new ShellError('EOUTSIDE', vpath);
+      } else {
+        assertAncestorInside(path.dirname(targetPath), vpath);
       }
-      const target = targetPath || host;
-      const targetReal = realOf(target);
-      const check = targetReal || target;
-      if (!inside(rootReal, check) && !inside(rootHost, check)) throw new ShellError('EOUTSIDE', vpath);
     }
     return { host, vpath };
   }
@@ -197,10 +240,10 @@ export function createFs(options = {}) {
 
   function lstat(input, cwd) {
     const entry = resolve(input, cwd, { followFinal: false });
-    if (entry.device) return { isFile: entry.device !== 'stdout' && entry.device !== 'stderr', isDir: false, isSymlink: false, isDevice: entry.device, size: 0, mtimeMs: 0, mode: 0o666 };
+    if (entry.device) return { isFile: entry.device !== 'stdout' && entry.device !== 'stderr', isDir: false, isSymlink: false, isDevice: entry.device, size: 0, mtimeMs: 0, mtime: new Date(0), ino: 0, dev: 0, mode: 0o666 };
     try {
       const info = fsSync.lstatSync(entry.host);
-      return { isFile: info.isFile(), isDir: info.isDirectory(), isSymlink: info.isSymbolicLink(), isDevice: null, size: info.size, mtimeMs: info.mtimeMs, mode: info.mode };
+      return { isFile: info.isFile(), isDir: info.isDirectory(), isSymlink: info.isSymbolicLink(), isDevice: null, size: info.size, mtimeMs: info.mtimeMs, mtime: new Date(info.mtimeMs), ino: info.ino, dev: info.dev, mode: info.mode };
     } catch (error) {
       const code = error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 'ENOENT' : error.code === 'EACCES' ? 'EACCES' : 'EINVAL';
       throw new ShellError(code, entry.vpath);
@@ -213,7 +256,7 @@ export function createFs(options = {}) {
       const entry = resolve(input, cwd);
       try {
         const real = fsSync.statSync(entry.host);
-        return { ...info, isFile: real.isFile(), isDir: real.isDirectory(), size: real.size, mode: real.mode, mtimeMs: real.mtimeMs };
+        return { ...info, isFile: real.isFile(), isDir: real.isDirectory(), size: real.size, mode: real.mode, mtimeMs: real.mtimeMs, mtime: new Date(real.mtimeMs), ino: real.ino, dev: real.dev };
       } catch {
         throw new ShellError('ENOENT', entry.vpath);
       }
@@ -342,7 +385,13 @@ export function createFs(options = {}) {
     const info = (() => { try { return fsSync.statSync(a.host); } catch { return null; } })();
     if (!info) throw new ShellError('ENOENT', a.vpath);
     try {
-      fsSync.cpSync(a.host, b.host, { recursive: opts.recursive !== false, force: true, errorOnExist: false, dereference: false });
+      fsSync.cpSync(a.host, b.host, {
+        recursive: opts.recursive !== false,
+        force: true,
+        errorOnExist: false,
+        dereference: opts.dereference === true,
+        preserveTimestamps: opts.preserveTimestamps === true,
+      });
     } catch (error) {
       throw new ShellError(error.code === 'ENOENT' ? 'ENOENT' : 'EACCES', b.vpath);
     }
@@ -404,7 +453,6 @@ export function createFs(options = {}) {
     let frontier = [{ vpath: absolute ? '/' : cwd, hostReady: true }];
     for (let index = 0; index < segments.length; index++) {
       const segment = segments[index];
-      const last = index === segments.length - 1;
       const next = [];
       for (const node of frontier) {
         if (segment === '**' && globstar) {
@@ -425,7 +473,6 @@ export function createFs(options = {}) {
         catch { continue; }
         for (const entry of entries) {
           if (!matchSegment(segment, entry.name, segment.startsWith('.'))) continue;
-          if (last && entry.isDir) continue;
           next.push({ vpath: joinVirtual(node.vpath, entry.name) });
         }
       }
@@ -454,8 +501,15 @@ export function createFs(options = {}) {
     virtual,
     host: (input, cwd) => target(input, cwd).host,
     vpath: (input, cwd) => resolve(input, cwd).vpath,
-    stat, lstat, exists, readdir, readBuffer, readText, writeText,
-    mkdirp, remove, rmdir, rename, copy, chmod, realpath, walk, glob, sizeOf, deviceFor,
+    stat, lstat, exists, readdir, readBuffer, readText,
+    writeText: mutating(writeText),
+    mkdirp: mutating(mkdirp),
+    remove: mutating(remove),
+    rmdir: mutating(rmdir),
+    rename: mutating(rename),
+    copy: mutating(copy),
+    chmod: mutating(chmod),
+    realpath, walk, glob, sizeOf, deviceFor,
     assertWritable: (input, cwd) => { const entry = resolve(input, cwd); assertWritable(entry.vpath); guardRoot(entry.vpath, 'modify'); return entry; },
     isDevice: (input, cwd) => Boolean(resolve(input, cwd).device),
     tempDir: () => os.tmpdir(),

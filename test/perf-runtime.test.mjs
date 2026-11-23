@@ -191,7 +191,7 @@ test('a queued snapshot or screenshot wakes an in-flight wait', async () => {
   assert.ok(elapsedMs < 1000, 'wake took ' + elapsedMs.toFixed(1) + 'ms');
   assert.equal(gate.active, false);
   assert.equal(gate.wake(), false);
-  assert.deepEqual([...WAIT_SHORTCUTS], ['snapshot', 'screenshot']);
+  assert.deepEqual([...WAIT_SHORTCUTS], ['snapshot', 'view', 'screenshot']);
 });
 
 test('a newer wait replaces the pending one and zero waits resolve immediately', async () => {

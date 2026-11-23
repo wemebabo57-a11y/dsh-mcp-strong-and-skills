@@ -21,8 +21,41 @@ import { createBuiltins } from './builtins.mjs';
 export { ShellExit, ShellBreak, ShellContinue, ShellReturn, ShellAbort };
 
 const DEFAULT_PATH = '/usr/local/bin:/usr/bin:/bin';
+const MAX_FUNCTION_DEPTH = 256;
 
 function now() { return Date.now(); }
+
+function isFile(file) {
+  try { return fsNode.statSync(file).isFile(); } catch { return false; }
+}
+
+function windowsSystemDirectory() {
+  const env = processNode.env || {};
+  const root = env.SystemRoot || env.windir || env.WINDIR || 'C:\\Windows';
+  return pathNode.join(root, 'System32');
+}
+
+/** Trusted taskkill.exe path; never a bare name that could resolve inside a repository. */
+export function resolveTaskkillPath() {
+  if (processNode.platform !== 'win32') return null;
+  const candidate = pathNode.join(windowsSystemDirectory(), 'taskkill.exe');
+  return isFile(candidate) ? candidate : null;
+}
+
+/** Absolute, existing ComSpec. Never returns a relative "cmd.exe". */
+export function resolveComSpec() {
+  const env = processNode.env || {};
+  const configured = env.ComSpec;
+  if (configured && pathNode.isAbsolute(configured) && isFile(configured)) return configured;
+  if (processNode.platform === 'win32') {
+    const fallback = pathNode.join(windowsSystemDirectory(), 'cmd.exe');
+    if (isFile(fallback)) return fallback;
+    throw Object.assign(new Error('cmd.exe: trusted system interpreter not found'), { code: 'ENOENT' });
+  }
+  const shell = env.SHELL;
+  if (shell && pathNode.isAbsolute(shell) && isFile(shell)) return shell;
+  return '/bin/sh';
+}
 
 function envObject() {
   return safeEnv();
@@ -32,6 +65,7 @@ export function cloneScope(scope) {
   const copy = Object.create(Object.getPrototypeOf(scope));
   Object.assign(copy, scope);
   copy.vars = new Map(scope.vars);
+  copy.funcs = new Map(scope.funcs);
   copy.exported = new Set(scope.exported);
   copy.readonly = new Set(scope.readonly);
   copy.frames = scope.frames.map((frame) => new Map(frame));
@@ -174,16 +208,32 @@ export function resolveExternal(scope, program) {
   return { file, kind };
 }
 
-function quoteWindowsArg(arg) {
-  if (arg === '') return '""';
-  if (!/[\s"&|<>^()]/.test(arg)) return arg;
-  return '"' + arg.replace(/"/g, '\\"') + '"';
+const CMD_ARG_SAFE = /^[A-Za-z0-9_\-.,:/=@+\\ ]*$/;
+const CMD_PROGRAM_SAFE = /^[A-Za-z0-9_\-.,:/=@+\\ ()]+$/;
+
+function quoteCmdPart(value, pattern, label) {
+  const text = String(value);
+  if (!text || !pattern.test(text)) {
+    const error = new Error('unsafe ' + label + ' for a .cmd/.bat program: ' + JSON.stringify(text));
+    error.code = 'EINVAL';
+    throw error;
+  }
+  return '"' + text + '"';
+}
+
+/** cmd.exe does not understand backslash-escaped quotes and expands %VAR%. */
+export function quoteCmdArg(arg) {
+  return quoteCmdPart(arg, CMD_ARG_SAFE, 'argument');
+}
+
+function quoteCmdProgram(file) {
+  return quoteCmdPart(file, CMD_PROGRAM_SAFE, 'program path');
 }
 
 export function spawnArguments(resolved, program, args) {
   if (resolved.kind === 'cmd') {
-    const comspec = processNode.env.ComSpec || 'cmd.exe';
-    const line = [resolved.file].concat(args).map(quoteWindowsArg).join(' ');
+    const comspec = resolveComSpec();
+    const line = [quoteCmdProgram(resolved.file)].concat(args.map(quoteCmdArg)).join(' ');
     return { file: comspec, args: ['/d', '/s', '/c', '"' + line + '"'], options: { windowsVerbatimArguments: true } };
   }
   return { file: resolved.file, args, options: {} };
@@ -316,6 +366,12 @@ export function createShell(options) {
       childScope.shell = saved;
     }
     if (saved) saved.lastCmdStatus = substitutedStatus;
+    const diagnostic = errSink.text();
+    if (diagnostic) {
+      const target = saved && saved.activeIo ? saved.activeIo : null;
+      if (target && typeof target.error === 'function') target.error(diagnostic);
+      else if (saved && saved.mainErr) saved.mainErr.write(diagnostic);
+    }
     return sink.text().replace(/\n+$/, '');
   };
 
@@ -325,17 +381,31 @@ export function createShell(options) {
     }
     const resolved = resolveExternal(scope, argv[0]);
     if (!resolved) return { code: 127, stdout: '', stderr: argv[0] + ': command not found\n' };
+    shell.check();
     const spawned = spawnArguments(resolved, argv[0], argv.slice(1));
     const env = Object.assign(exportEnv(scope), extraEnv || {});
-    const result = spawnSync(spawned.file, spawned.args, Object.assign({
+    const options = Object.assign({
       cwd: scope.hostCwd,
       env,
       input: inputText === undefined ? '' : String(inputText),
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
       windowsHide: true,
-    }, spawned.options));
-    if (result.error) return { code: 127, stdout: '', stderr: argv[0] + ': ' + result.error.message + '\n' };
+    }, spawned.options);
+    if (shell.deadline) {
+      const remaining = shell.deadline - now();
+      if (remaining <= 0) { shell.aborted = 'timeout'; throw new ShellAbort('timeout'); }
+      options.timeout = Math.max(1, remaining);
+    }
+    const result = spawnSync(spawned.file, spawned.args, options);
+    if (result.error) {
+      if (result.error.code === 'ETIMEDOUT' || (shell.deadline && now() >= shell.deadline)) {
+        shell.aborted = 'timeout';
+        throw new ShellAbort('timeout');
+      }
+      return { code: 127, stdout: '', stderr: argv[0] + ': ' + result.error.message + '\n' };
+    }
+    if (shell.deadline && now() > shell.deadline) { shell.aborted = 'timeout'; throw new ShellAbort('timeout'); }
     return { code: result.status === null ? 1 : result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
   };
 
@@ -386,7 +456,10 @@ export function createShell(options) {
       const killTree = () => {
         if (!child) return;
         if (processNode.platform === 'win32' && child.pid) {
-          try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }); return; } catch { /* fall through */ }
+          const taskkill = resolveTaskkillPath();
+          if (taskkill) {
+            try { spawnSync(taskkill, ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }); return; } catch { /* fall through */ }
+          }
         }
         try { child.kill('SIGKILL'); } catch { /* ignore */ }
       };
@@ -551,6 +624,7 @@ async function applyRedirections(redirs, scope, io) {
   return {
     channels,
     io,
+    closers,
     close() {
       io.outSink = originalOut;
       io.errSink = originalErr;
@@ -726,7 +800,9 @@ async function execList(node, scope, io) {
       throw error;
     }
     scope.lastStatus = status;
-    if (status !== 0 && errexitActive(scope)) throw new ShellExit(status);
+    const exempt = scope.errexitExemptNode === item.node;
+    scope.errexitExemptNode = null;
+    if (status !== 0 && !exempt && errexitActive(scope)) throw new ShellExit(status);
   }
   return status;
 }
@@ -734,6 +810,7 @@ async function execList(node, scope, io) {
 async function execAndOr(node, scope, io) {
   scope.errexitSuppressed = (scope.errexitSuppressed || 0) + 1;
   let status;
+  let lastExecuted = node.first;
   try {
     status = await execNode(node.first, scope, io);
     scope.lastStatus = status;
@@ -741,11 +818,15 @@ async function execAndOr(node, scope, io) {
       if (step.op === '&&' && status !== 0) continue;
       if (step.op === '||' && status === 0) continue;
       status = await execNode(step.node, scope, io);
+      lastExecuted = step.node;
       scope.lastStatus = status;
     }
   } finally {
     scope.errexitSuppressed -= 1;
   }
+  const rest = node.rest || [];
+  const finalNode = rest.length ? rest[rest.length - 1].node : node.first;
+  if (status !== 0 && errexitActive(scope) && lastExecuted !== finalNode) scope.errexitExemptNode = node;
   return status;
 }
 
@@ -913,7 +994,7 @@ async function execGroup(node, scope, io) {
     try {
       return await execNodes(node.body, childScope, io);
     } catch (error) {
-      if (error instanceof ShellExit && error.code === 0) return 0;
+      if (error instanceof ShellExit) return error.code;
       if (error instanceof ShellBreak || error instanceof ShellContinue || error instanceof ShellReturn) return 0;
       throw error;
     }
@@ -925,6 +1006,10 @@ async function execBuiltinOrFunction(argv, scope, io, assigns) {
   const program = argv[0];
   const args = argv.slice(1);
   if (scope.funcs.has(program)) {
+    if (scope.frames.length >= MAX_FUNCTION_DEPTH) {
+      io.error(program + ': maximum function nesting depth exceeded\n');
+      return 1;
+    }
     const body = scope.funcs.get(program);
     const previous = scope.positional;
     scope.positional = args;
@@ -1013,7 +1098,7 @@ export function runCommandSync(scope, argv) {
       write(text) { chunks.push(String(text)); },
       error(text) { errChunks.push(String(text)); },
       exit(code) { throw new ShellExit(code); },
-      check() {},
+      check() { if (scope.shell) scope.shell.check(); },
       stdinText: '',
     };
     let code = 0;
@@ -1022,6 +1107,7 @@ export function runCommandSync(scope, argv) {
       code = typeof result === 'number' ? result : 0;
     } catch (error) {
       if (error instanceof ShellExit) code = error.code;
+      else if (error instanceof ShellAbort) throw error;
       else { errChunks.push(String(error.message || error) + '\n'); code = 1; }
     }
     return { code, stdout: chunks.join(''), stderr: errChunks.join('') };
@@ -1038,7 +1124,7 @@ export function runCommandSync(scope, argv) {
       stdin: '',
       out(text) { chunks.push(String(text)); },
       err(text) { errChunks.push(String(text)); },
-      check() {},
+      check() { if (scope.shell) scope.shell.check(); },
       getVar(name) { return scope.getVar(name); },
       runCommand(commandArgv, restArgs) {
         const argv = Array.isArray(commandArgv) ? commandArgv : [commandArgv].concat(restArgs || []);
@@ -1098,10 +1184,13 @@ async function execSimple(node, scope, io) {
       const existing = Array.isArray(previous) ? previous.slice() : (previous === undefined ? [] : [String(previous)]);
       const appended = Array.isArray(value) ? value : (value === undefined ? [] : [value]);
       value = existing.concat(appended);
-    } else if (assign.index !== undefined) {
+    } else if (assign.index !== undefined || assign.indexExpr !== undefined) {
+      const index = assign.index !== undefined
+        ? assign.index
+        : evalArith(await expand.expandArithText(assign.indexExpr, scope), scope);
       const previous = scope.getVar(name);
       const existing = Array.isArray(previous) ? previous.slice() : [];
-      existing[assign.index] = Array.isArray(value) ? value[0] : value;
+      existing[index] = Array.isArray(value) ? value[0] : value;
       value = existing;
     }
     assignmentValues.push({ name, value });
@@ -1123,6 +1212,14 @@ async function execSimple(node, scope, io) {
   };
 
   const redirection = await applyRedirections(node.redirs, scope, io);
+  const redirectOnlyExec = argv.length === 1 && argv[0] === 'exec' && redirection.closers.length > 0;
+  let persistentExec = false;
+  if (redirectOnlyExec) {
+    persistentExec = true;
+    const previous = scope.persistentSinks || [];
+    for (const sink of previous) { try { sink.close(); } catch { /* already flushed */ } }
+    scope.persistentSinks = [...new Set(redirection.closers)];
+  }
   const stdinChannel = redirection.channels[0];
   const commandIo = createIo(
     scope,
@@ -1154,7 +1251,7 @@ async function execSimple(node, scope, io) {
     else status = await runExternal(argv, scope, commandIo, redirection);
   } finally {
     if (!isAssignmentPersisting(scope, argv)) restore();
-    redirection.close();
+    if (!persistentExec) redirection.close();
   }
   return status;
 }
@@ -1220,7 +1317,10 @@ async function runExternal(argv, scope, io, redirection) {
     const killTree = () => {
       if (!child || !child.pid) return;
       if (processNode.platform === 'win32') {
-        try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }); return; } catch { /* fall through */ }
+        const taskkill = resolveTaskkillPath();
+        if (taskkill) {
+          try { spawnSync(taskkill, ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }); return; } catch { /* fall through */ }
+        }
       }
       try { child.kill('SIGKILL'); } catch { /* ignore */ }
     };
@@ -1333,6 +1433,9 @@ export async function runScript(options) {
       else if (trapError instanceof Error) { shell.mainErr.write((trapError.message || String(trapError)) + '\n'); }
       else { shell.mainErr.write(String(trapError) + '\n'); }
     }
+  }
+  for (const sink of scope.persistentSinks || []) {
+    try { sink.close(); } catch (error) { shell.mainErr.write((error && error.message ? error.message : String(error)) + '\n'); }
   }
   return {
     stdout: shell.mainOut.text(),

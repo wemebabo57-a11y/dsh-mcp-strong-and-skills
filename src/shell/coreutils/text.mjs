@@ -694,6 +694,9 @@ function parseSet(text) {
       if (end < start) {
         return { error: "range-endpoints of '" + item.char + '-' + after.char + "' are in reverse collating sequence order" };
       }
+      if (end - start > 65536) {
+        return { error: "range '" + item.char + '-' + after.char + "' is too large" };
+      }
       for (let code = start; code <= end; code += 1) chars.push(String.fromCodePoint(code));
       i += 2;
       continue;
@@ -797,6 +800,7 @@ function runTee(prog, args, ctx) {
 
 // ------------------------------------------------------------------------ nl
 
+const MAX_NL_WIDTH = 1_000_000;
 const NL_DEFS = {
   b: 'value',
   n: 'value',
@@ -833,7 +837,7 @@ function runNl(prog, args, ctx) {
   if (!['a', 't', 'n'].includes(style)) return fail(prog, "invalid body numbering style: '" + style + "'", 1);
   if (!['ln', 'rn', 'rz'].includes(format)) return fail(prog, "invalid line numbering format: '" + format + "'", 1);
   const width = toInt(widthText);
-  if (width === null || width < 1) return fail(prog, "invalid line number field width: '" + widthText + "'", 1);
+  if (width === null || width < 1 || width > MAX_NL_WIDTH) return fail(prog, "invalid line number field width: '" + widthText + "'", 1);
   const start = toInt(startText);
   if (start === null) return fail(prog, "invalid starting line number: '" + startText + "'", 1);
   const step = toInt(stepText);

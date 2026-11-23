@@ -1,5 +1,22 @@
 # 更新记录
 
+## 0.4.4-preview.1 — 2026-11-23（0.4.4 预览版 1：安全审计收尾 + 浏览器真实交互 + 桌面自动化）
+
+包版本：`0.4.4-preview.1`。默认 6 个入口不变；按需技能从 8 个增至 11 个，`strong_browse` 新增页面查看与真实鼠标动作，新增默认关闭的 `strong_desktop`（Windows 全局键鼠、窗口与截图）。
+
+- **工作区逃逸（严重）**：`realpath` 缓存只保留成功结果，所有变更操作在前后清空缓存，修复“预热 → 删除 → junction 交换”投毒链；路径解析不再对缺失分量回退纯词法检查，而是向上找到最近存在的祖先并校验真实路径，任何越界祖先立即拒绝；`echo *` 重新包含目录。
+- **命令执行边界（高）**：Git 与 `taskkill` 只从工作区外的可信绝对路径启动并显式设置工作目录；cmd.exe 参数改用严格允许列表与引号包装，拒绝引号、`&`、`%` 等元字符；同步 coreutils 的嵌套调用恢复 deadline 检查；函数递归限制 256 层；子 shell 的 `exit` 只结束子 shell；`cd` 同步宿主工作目录；`exec >file` 的持久重定向在脚本结束时正确落盘。
+- **Shell 语义**：`set -e` 不再因 `&&` 列表中间命令失败而退出；索引赋值支持变量与算术表达式（`a[i]=x`、`a[$((1+1))]=x`），值和引号继续按普通展开处理。
+- **正则与资源上限（高/中）**：安全扫描器识别非捕获组与连续量词，`grep` 的 `a**` 折叠为 `a*`；`[[ =~ ]]`、`[[ == ]]` glob、`${v//pat/rep}` 参数替换、awk 多字符 `FS` 均不再直接构造可回溯正则，glob 与参数替换改为有界 NFA 匹配；awk/printf/nl 的宽度与精度统一设上限；`sort` 改为可中断的稳定归并；`tr` 范围跨度受限；`ls -R` 与递归 `grep` 检测符号链接环。
+- **文件语义与数据安全**：`mv` 遇到已存在目标目录时合并而不是递归删除，`ln` 拒绝覆盖真实目录；`cp` 的 `-L/-P/-p/-u/-a` 生效；`touch -d/-t/-r` 可用；`stat` 补回 `mtime/ino/dev`，`test -nt/-ot/-ef` 恢复；`ls -l`/readlink 不再泄漏宿主绝对路径。
+- **联网与浏览器**：`strong_web` 先解析并固定公网 IP 再连接，重定向逐跳复检，DNS 失败不再被吞掉，补 `198.18.0.0/15` 与 NAT64 黑名单；未闭合的 script/style/noscript/svg 不再把内容泄漏进正文。`strong_browse` 在导航前与每个页面请求前执行同一套 SSRF 检查；`view` 一次返回正文、最多 40 个可交互元素及坐标和 JPEG 截图；`click`/`hover`/`drag`/`mouse` 通过 CDP 发送真实鼠标事件，`scroll` 使用真实滚轮事件。
+- **桌面自动化（新增，默认关闭）**：`strong_desktop` 只在 `expanded` 且 `desktopTool: true` 时注册；通过常驻 PowerShell 主机、Win32 `SendInput` 与 `SetCursorPos` 执行真实鼠标移动、左右中键点击（1–3 次）、拖拽、滚轮和 Unicode 键盘输入/组合键。可枚举、激活、最小化、最大化、还原和关闭窗口，启动本机程序，并读取全屏 JPEG；截图同时以 image content 返回 MCP 与原生宿主。坐标是物理像素，键盘输入作用于当前前台窗口；操作可能不可逆，需先定位并确认。
+- **MCP 图片**：`strong_browse` 的 `view`/`screenshot` 与 `strong_desktop` 的 `screenshot` 在工具结果文本之后追加 image content，客户端支持图片时模型可直接查看页面或桌面截图。
+- **提示词与技能**：浏览器路由明确“open → view 定位 → 真实鼠标操作 → 再 view 验证”；桌面路由要求先 `screenshot`/`windows` 定位、再操作、再截图验证。新增 `browser-automation`、`shell-safety` 与 `desktop-automation` 三个按需技能，技能目录与 README/hero 同步为 11 个。
+- **验证**：`node --test` **456 项全部通过**；`node scripts/check.mjs` 与 `node scripts/build-ui.mjs --check` 通过。真实浏览器复验了私网拦截、`view` 截图与元素坐标、selector 点击和按坐标的真实鼠标点击；真实桌面用受控双输入框 WinForms 窗口复验了窗口枚举、`activate`、按坐标点击聚焦第二个输入框、Unicode 输入、`Ctrl+A` 组合键和截图；标题依次变为 `DSH Desktop Fixture: hello` 与 `DSH Desktop Fixture: world`。
+- **已知边界**：桌面工具仅支持 Windows 交互式桌面会话，依赖 PowerShell 5.1，不能提升到管理员权限；全屏截图会包含屏幕上的其他窗口，使用前应确认没有敏感内容。独立 MCP 没有 DSH 会话沙箱，桌面工具与 `--shell on` 一样按当前用户权限运行。
+
+
 ## 0.4.3 — 2026-11-22（正式版：安全与 Shell 语义修复 + 提示词压缩）
 
 包版本：`0.4.3`。工具面、开关与配置字段不变：默认 6 个入口，开启 Shell 后 7 个。本版把 0.4.3-preview.1/2 的沙箱化与内置 Bash 重写收尾到文档宣称的能力边界，集中修复审查发现的越权、环境泄漏、同步启动绕过与 Shell 语义缺口，并继续压缩常驻提示词。

@@ -1,6 +1,8 @@
 // Shell parser: token stream -> AST per docs/shell-design.md.
 // Synchronous, dependency-free; performs no expansion and no execution.
 
+import { lex } from './lexer.mjs';
+
 const EOF_TOKEN = Object.freeze({ t: 'eof' });
 const COMPOUND_KINDS = new Set(['group', 'if', 'for', 'while', 'until', 'case']);
 
@@ -311,10 +313,14 @@ class Parser {
         const rawWord = word.raw || '';
         const firstPart = word.parts && word.parts[0];
         if (firstPart && firstPart.t === 'lit' && firstPart.q === 0) {
-          const indexed = /^([A-Za-z_][A-Za-z0-9_]*)\[([0-9]+)\]=([\s\S]*)$/.exec(rawWord);
+          const indexed = /^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]+)\]=([\s\S]*)$/.exec(rawWord);
           if (indexed) {
-            const valueParts = indexed[3] ? [{ t: 'lit', v: indexed[3], q: 0 }] : [];
-            assigns.push({ name: indexed[1], index: Number(indexed[2]), value: { parts: valueParts } });
+            let valueParts = [];
+            if (indexed[3]) {
+              const valueWord = lex(indexed[3]).find((token) => token.t === 'word');
+              valueParts = valueWord ? valueWord.parts : [];
+            }
+            assigns.push({ name: indexed[1], indexExpr: indexed[2], value: { parts: valueParts } });
             continue;
           }
           const appending = /^([A-Za-z_][A-Za-z0-9_]*)\+=$/.exec(rawWord);

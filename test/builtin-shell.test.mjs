@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile, symlink } from 'node:fs/promise
 import os from 'node:os';
 import path from 'node:path';
 import { runBuiltinShell } from '../src/builtin-shell.mjs';
+import { globFind } from '../src/shell/expand.mjs';
 
 async function makeRoot() {
   return mkdtemp(path.join(os.tmpdir(), 'dsh-builtin-'));
@@ -239,6 +240,48 @@ test('builtin shell covers printf, seq and exit without falling back to MSYS too
     assert.equal(stopped.exitCode, 7);
     assert.equal(stopped.stdout, 'out\n');
     assert.equal(stopped.stderr, 'err\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('parameter substitution uses bounded glob matching', () => {
+  assert.deepEqual(globFind('*b', 'abcabc'), { start: 0, end: 5 });
+  assert.deepEqual(globFind('b*', 'abcabc'), { start: 1, end: 6 });
+  assert.deepEqual(globFind('??', 'abcabc'), { start: 0, end: 2 });
+  assert.equal(globFind('x', 'abcabc'), null);
+  const adversarial = '*a'.repeat(40) + '*b';
+  const started = Date.now();
+  assert.equal(globFind(adversarial, 'a'.repeat(2000)), null);
+  assert.ok(Date.now() - started < 2000, 'glob search must stay bounded');
+});
+
+test('builtin shell keeps exec redirection, errexit and indexed assignment semantics', async () => {
+  const root = await makeRoot();
+  try {
+    const run = (command, extra = {}) => runBuiltinShell({ command, cwd: root, root, env: { ...process.env }, ...extra });
+    const redirected = await run('exec >out.txt\necho one\necho two');
+    assert.equal(redirected.exitCode, 0, redirected.stderr);
+    assert.equal(redirected.stdout, '');
+    assert.equal(await readFile(path.join(root, 'out.txt'), 'utf8'), 'one\ntwo\n');
+
+    const andOr = await run('set -e\nfalse && true\necho after');
+    assert.equal(andOr.exitCode, 0, andOr.stderr);
+    assert.equal(andOr.stdout, 'after\n');
+    const final = await run('set -e\ntrue && false\necho after');
+    assert.equal(final.exitCode, 1);
+    assert.equal(final.stdout, '');
+    const condition = await run('set -e\nif false && true; then :; fi\nfalse\necho after');
+    assert.equal(condition.exitCode, 1);
+    assert.equal(condition.stdout, '');
+
+    const indexed = await run('i=1\na[i]=x\na[$((1+1))]="two words"\necho "${a[1]}|${a[2]}"');
+    assert.equal(indexed.exitCode, 0, indexed.stderr);
+    assert.equal(indexed.stdout, 'x|two words\n');
+
+    const hugeNl = await run('nl -w 999999999 /dev/null');
+    assert.equal(hugeNl.exitCode, 1);
+    assert.match(hugeNl.stderr, /invalid line number field width/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

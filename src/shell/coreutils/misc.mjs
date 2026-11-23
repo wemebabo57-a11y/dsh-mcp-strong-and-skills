@@ -574,13 +574,13 @@ function parsePrintfFormat(format) {
       j++;
       let digits = '';
       while (j < format.length && format[j] >= '0' && format[j] <= '9') { digits += format[j]; j++; }
-      precision = digits === '' ? 0 : Number(digits);
+      precision = digits === '' ? 0 : Math.min(Number(digits), 1_000_000);
     }
     const conv = format[j];
     if (conv === undefined || !'efgEFG'.includes(conv)) return { error: 'has unknown % directive' };
     conversions++;
     if (conversions > 1) return { error: 'has too many % directives' };
-    spec = { flags, width: widthText === '' ? 0 : Number(widthText), precision, conv };
+    spec = { flags, width: widthText === '' ? 0 : Math.min(Number(widthText), 1_000_000), precision, conv };
     i = j;
   }
   if (conversions === 0) return { error: 'has no % directive' };

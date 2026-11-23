@@ -20,6 +20,8 @@
 import { ShellError, ERRNO_TEXT } from '../fs.mjs';
 import { assertSafeRegex } from '../regex-safety.mjs';
 
+const MAX_FORMAT_FIELD = 1_000_000;
+
 export const names = ['awk'];
 
 const BS = String.fromCharCode(92);
@@ -371,7 +373,7 @@ function parseFormatSpec(format, start) {
       digits += format[index];
       index += 1;
     }
-    if (digits) spec.width = Number(digits);
+    if (digits) spec.width = Math.min(Number(digits), MAX_FORMAT_FIELD);
   }
   if (format[index] === '.') {
     index += 1;
@@ -384,7 +386,7 @@ function parseFormatSpec(format, start) {
         digits += format[index];
         index += 1;
       }
-      spec.precision = digits ? Number(digits) : 0;
+      spec.precision = digits ? Math.min(Number(digits), MAX_FORMAT_FIELD) : 0;
     }
   }
   while (index < format.length && 'hlLqjzt'.indexOf(format[index]) >= 0) index += 1;
@@ -510,7 +512,7 @@ function formatInteger(spec, value, rt) {
   }
   if (spec.precision !== null) {
     if (spec.precision === 0 && digits === '0') digits = '';
-    while (digits.length < spec.precision) digits = '0' + digits;
+    digits = digits.padStart(spec.precision, '0');
   }
   if (digits === '') digits = '0';
   const sign = negative ? '-' : spec.flags.plus ? '+' : spec.flags.space ? ' ' : '';
@@ -591,10 +593,11 @@ function formatOutput(format, values, rt) {
         spec.flags.minus = true;
         spec.width = -spec.width;
       }
+      spec.width = Math.min(spec.width, MAX_FORMAT_FIELD);
     }
     if (spec.starPrecision) {
       if (index >= values.length) throw new AwkError('not enough arguments to satisfy format string');
-      spec.precision = Math.max(0, Math.trunc(toNum(values[index], rt)));
+      spec.precision = Math.min(Math.max(0, Math.trunc(toNum(values[index], rt))), MAX_FORMAT_FIELD);
       index += 1;
     }
     if (spec.conv === '') {
@@ -2137,7 +2140,12 @@ class Runtime {
       return text.split(fs);
     }
     const source = paragraph ? '(?:' + ereToJs(fs) + '|\n)' : ereToJs(fs);
-    return splitByRegex(text, new RegExp(source));
+    try {
+      assertSafeRegex(source);
+      return splitByRegex(text, new RegExp(source));
+    } catch {
+      throw new AwkError('invalid field separator: ' + fs);
+    }
   }
 
   setRecord(text) {

@@ -70,7 +70,7 @@ test('stdio initialize, tool discovery, on-demand skills, resources and bounded 
   assert.equal(skills.skills[0].id, 'debug');
   assert.ok(skills.skills[0].content.length > 100);
   const resources = await c.request(4, 'resources/list');
-  assert.equal(resources.result.resources.length, 8);
+  assert.equal(resources.result.resources.length, 11);
   const body = await c.request(5, 'resources/read', { uri: 'strong://skills/frontend-design' });
   assert.match(body.result.contents[0].text, /深蓝/);
   const context = await c.request(6, 'tools/call', { name: 'strong_context', arguments: { action: 'read', path: 'package.json', limit: 3 } });
@@ -108,6 +108,21 @@ test('MCP shell tool is opt-in, honestly annotated, and executes a real command'
   assert.equal(value.stdout, 'shell-mcp');
   assert.equal(value.stderr, '');
   assert.ok(['git-bash', 'bash', 'wsl'].includes(value.shell.backend));
+  assert.equal(c.stderr, '');
+});
+
+test('MCP desktop tool is opt-in, destructive and exposes the full action set', async t => {
+  const c = client(t, 'lean', ['--desktop', 'on']);
+  await initialize(c);
+  const listed = await c.request(2, 'tools/list');
+  assert.equal(listed.result.tools.length, 7);
+  const desktop = listed.result.tools.find(tool => tool.name === 'strong_desktop');
+  assert.ok(desktop);
+  assert.deepEqual(desktop.annotations, { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
+  assert.equal(desktop.inputSchema.additionalProperties, false);
+  for (const action of ['screenshot', 'windows', 'cursor', 'move', 'click', 'drag', 'scroll', 'type', 'press', 'activate', 'launch', 'wait']) {
+    assert.ok(desktop.inputSchema.properties.action.enum.includes(action), action);
+  }
   assert.equal(c.stderr, '');
 });
 

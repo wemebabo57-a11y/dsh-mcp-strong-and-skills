@@ -61,7 +61,7 @@ test('native plugin registers a dynamic policy and every canonical tool', async 
   for (const definition of registrations.values()) {
     assert.equal(definition.parameters.type, 'object');
     assert.equal(definition.output.schema.type, 'object');
-    assert.equal(definition.isConcurrencySafe({}), definition.name !== 'strong_shell');
+    assert.equal(definition.isConcurrencySafe({}), !['strong_shell', 'strong_desktop'].includes(definition.name), definition.name);
     const canonical = { skills: [{ id: 'example', content: '中文\n"quoted"' }], truncated: false };
     const rendered = definition.output.render({}, canonical);
     assert.equal(rendered.length, 1);
@@ -194,6 +194,22 @@ test('live shell switch turns the policy into an imperative shell route', () => 
   assert.doesNotMatch(render(), /strong_shell/);
 });
 
+test('live desktop setting adds strong_desktop without exposing it by default', async t => {
+  const root = await temporaryWorkspace(t, 'live desktop');
+  const state = { desktopTool: false };
+  const { ctx, registrations, visibleNames } = host(undefined, root);
+  apply(ctx, { desktopTool: { get: () => state.desktopTool } });
+  assert.deepEqual(await visibleNames(), TOOLS.map(tool => tool.name));
+  state.desktopTool = true;
+  assert.deepEqual(await visibleNames(), [...TOOLS.map(tool => tool.name), 'strong_desktop']);
+  const desktop = registrations.get('strong_desktop');
+  assert.equal(desktop.isConcurrencySafe({}), false);
+  assert.equal(desktop.parameters.properties.action.enum.includes('cursor'), true);
+  assert.equal(desktop.parameters.additionalProperties, false);
+  state.desktopTool = false;
+  await assert.rejects(registrations.get('strong_desktop').execute({ action: 'wait', ms: 1 }, { signal: new AbortController().signal }), /Unknown tool/);
+});
+
 test('unlimited native setting overrides compact discovery and stays live', async t => {
   const root = await temporaryWorkspace(t, 'unlimited native');
   const state = { unlimitedTokens: false };
@@ -224,10 +240,11 @@ test('native Standard Schema validates defaults and rejects invalid settings', a
   assert.equal(config.toolSet, 'expanded');
   assert.equal(config.unlimitedTokens, false);
   assert.equal(config.shellTool, false);
+  assert.equal(config.desktopTool, false);
   assert.equal(config.shellBackend, 'auto');
   assert.equal(config.shellPath, '');
   assert.equal(config.wslDistro, '');
-  for (const invalid of [{ unlimitedTokens: 'true' }, { enhancedThinking: 'false' }, { claudeMode: 'true' }, { weNeedToThinking: 1 }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { shellTool: 'true' }, { shellBackend: 'fish' }, { shellPath: 'x'.repeat(1001) }, { wslDistro: 'x'.repeat(101) }, { maxFiles: 1 }]) {
+  for (const invalid of [{ unlimitedTokens: 'true' }, { enhancedThinking: 'false' }, { claudeMode: 'true' }, { weNeedToThinking: 1 }, { thinkingLevel: 'unbounded' }, { toolSet: 'all' }, { modelPreset: 'deepseek-v4.1-flash-api' }, { shellTool: 'true' }, { desktopTool: 'true' }, { shellBackend: 'fish' }, { shellPath: 'x'.repeat(1001) }, { wslDistro: 'x'.repeat(101) }, { maxFiles: 1 }]) {
     const result = await standard.validate(invalid);
     assert.ok(result.issues?.length, JSON.stringify(invalid));
   }

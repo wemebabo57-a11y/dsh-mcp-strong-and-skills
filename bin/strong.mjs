@@ -21,7 +21,7 @@ const HELP = `dsh-strong — DeepSeek Harness 编码增强
 通用增强选项：--thinking on|off --thinking-level balanced|deep
               --clarification auto|more|few --model auto|deepseek-v4-pro|deepseek-v4.1-flash-1017|generic
               --tools compact|expanded --claude-mode on|off --we-need-to on|off --unlimited on|off
-              --web on|off --web-private on|off --browse auto|on|off --ptc auto|on|off --browser-path <绝对路径>
+              --web on|off --web-private on|off --browse auto|on|off --desktop on|off --ptc auto|on|off --browser-path <绝对路径>
               --shell on|off --shell-backend auto|git-bash|wsl|bash|pwsh|cmd|builtin
               --shell-path <绝对路径> --wsl-distro <发行版>
 
@@ -50,7 +50,7 @@ export function parseArgs(argv) {
 }
 
 function checkOptions(command, options) {
-  const common = ['profile', 'thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited', 'web', 'web-private', 'browse', 'ptc', 'browser-path', 'shell', 'shell-backend', 'shell-path', 'wsl-distro', 'knowledge-file'];
+  const common = ['profile', 'thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited', 'web', 'web-private', 'browse', 'desktop', 'ptc', 'browser-path', 'shell', 'shell-backend', 'shell-path', 'wsl-distro', 'knowledge-file'];
   const allowed = {
     serve: ['root', ...common], skill: ['id', 'query', 'limit', ...common],
     inspect: ['root', 'action', 'path', 'query', 'start', 'limit', ...common],
@@ -71,7 +71,7 @@ export function optionsToConfig(options) {
     if (!values.includes(options[flag])) throw new Error(`--${flag} must be ${values.join('|')}`);
     config[field] = options[flag];
   }
-  for (const [flag, field] of [['thinking', 'enhancedThinking'], ['claude-mode', 'claudeMode'], ['we-need-to', 'weNeedToThinking'], ['unlimited', 'unlimitedTokens'], ['web', 'webTool'], ['web-private', 'webAllowPrivate'], ['shell', 'shellTool']]) {
+  for (const [flag, field] of [['thinking', 'enhancedThinking'], ['claude-mode', 'claudeMode'], ['we-need-to', 'weNeedToThinking'], ['unlimited', 'unlimitedTokens'], ['web', 'webTool'], ['web-private', 'webAllowPrivate'], ['desktop', 'desktopTool'], ['shell', 'shellTool']]) {
     if (options[flag] === undefined) continue;
     if (!['on', 'off'].includes(options[flag])) throw new Error(`--${flag} must be on or off`);
     config[field] = options[flag] === 'on';
@@ -113,7 +113,7 @@ export async function main(argv = process.argv.slice(2)) {
       process.stdout.write(`- insert:\n    - id: strong-skills\n      name: ${quote(fileURLToPath(new URL('../src/index.mjs', import.meta.url)))}\n      config:\n${Object.entries(fields).map(([key, value]) => `        ${key}: ${quote(value)}`).join('\n')}\n`);
     } else if (options.mode === 'mcp') {
       const args = [resolve(directory, 'bin/strong.mjs'), 'serve', '--root', root, '--profile', budget.profile];
-      for (const key of ['thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited', 'web', 'web-private', 'browse', 'ptc', 'browser-path', 'shell', 'shell-backend', 'shell-path', 'wsl-distro']) if (options[key] !== undefined) args.push(`--${key}`, options[key]);
+      for (const key of ['thinking', 'thinking-level', 'clarification', 'model', 'tools', 'claude-mode', 'we-need-to', 'unlimited', 'web', 'web-private', 'browse', 'desktop', 'ptc', 'browser-path', 'shell', 'shell-backend', 'shell-path', 'wsl-distro']) if (options[key] !== undefined) args.push(`--${key}`, options[key]);
       if (options['knowledge-file']) args.push('--knowledge-file', resolve(options['knowledge-file']));
       process.stdout.write(`- insert:\n    - id: strong-skills-mcp\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: strong\n        transport: stdio\n        command: ${quote(process.execPath)}\n        args: ${quote(args)}\n        cwd: ${quote(root)}\n`);
     } else throw new Error('--mode must be native or mcp');

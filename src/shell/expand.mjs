@@ -17,55 +17,169 @@ function isSep(ch, ifs) {
   return ifs.indexOf(ch) !== -1;
 }
 
-function escapeRegex(ch) {
-  if ('\\^$.*+?()[]{}|/'.indexOf(ch) !== -1) return '\\' + ch;
-  return ch;
-}
+// Shell glob matching is deliberately not implemented with a regular
+// expression: patterns such as *a*a*a*...*b backtrack polynomially. The classic
+// two-pointer matcher below is O(pattern x text) and cannot hang.
+const GLOB_MAX_TOKENS = 4096;
 
-export function patternToRegex(pattern) {
-  let out = '^';
-  let i = 0;
-  const n = pattern.length;
-  while (i < n) {
+function compileGlob(pattern) {
+  const tokens = [];
+  for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
     if (ch === '\\') {
       i++;
-      if (i < n) out += escapeRegex(pattern[i]);
-      i++;
+      if (i < pattern.length) tokens.push({ type: 'lit', ch: pattern[i] });
       continue;
     }
-    if (ch === '*') { out += '[\\s\\S]*'; i++; continue; }
-    if (ch === '?') { out += '[\\s\\S]'; i++; continue; }
+    if (ch === '*') { tokens.push({ type: 'star' }); continue; }
+    if (ch === '?') { tokens.push({ type: 'any' }); continue; }
     if (ch === '[') {
       let j = i + 1;
       let negate = false;
       if (pattern[j] === '!' || pattern[j] === '^') { negate = true; j++; }
-      let body = '';
+      const items = [];
       let closed = false;
       let first = true;
-      while (j < n) {
-        const cj = pattern[j];
-        if (cj === ']' && !first) { closed = true; j++; break; }
+      while (j < pattern.length) {
+        let c = pattern[j];
+        if (c === ']' && !first) { closed = true; j++; break; }
         first = false;
-        if (cj === '\\' && j + 1 < n) { body += '\\' + pattern[j + 1]; j += 2; continue; }
-        if (cj === '-' ) { body += '-'; j++; continue; }
-        body += cj === '\\' ? '\\\\' : cj.replace(/[\\^\]]/g, '\\$&');
-        j++;
+        if (c === '\\' && j + 1 < pattern.length) { c = pattern[j + 1]; j += 2; }
+        else j++;
+        if (pattern[j] === '-' && j + 1 < pattern.length && pattern[j + 1] !== ']') {
+          let high = pattern[j + 1];
+          const step = high === '\\' ? 2 : 1;
+          if (high === '\\') high = pattern[j + 2];
+          items.push({ lo: c, hi: high });
+          j += step + 1;
+        } else {
+          items.push({ ch: c });
+        }
       }
-      if (!closed) { out += '\\['; i++; continue; }
-      out += '[' + (negate ? '^' : '') + body + ']';
-      i = j;
+      if (!closed) { tokens.push({ type: 'lit', ch: '[' }); continue; }
+      tokens.push({ type: 'class', negate, items });
+      i = j - 1;
       continue;
     }
-    out += escapeRegex(ch);
-    i++;
+    tokens.push({ type: 'lit', ch });
   }
-  return new RegExp(out + '$', 's');
+  if (tokens.length > GLOB_MAX_TOKENS) throw new RangeError('glob pattern too complex');
+  return tokens;
+}
+
+function classMatches(token, ch) {
+  const hit = token.items.some(item => (item.ch !== undefined ? item.ch === ch : ch >= item.lo && ch <= item.hi));
+  return token.negate ? !hit : hit;
+}
+
+export function globMatch(pattern, text) {
+  const tokens = compileGlob(pattern);
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let resume = 0;
+  while (t < text.length) {
+    const token = tokens[p];
+    if (token && token.type === 'star') { star = p; resume = t; p++; continue; }
+    if (token && (token.type === 'any'
+      || (token.type === 'lit' && token.ch === text[t])
+      || (token.type === 'class' && classMatches(token, text[t])))) {
+      p++;
+      t++;
+      continue;
+    }
+    if (star !== -1) { p = star + 1; resume++; t = resume; continue; }
+    return false;
+  }
+  while (tokens[p] && tokens[p].type === 'star') p++;
+  return p === tokens.length;
+}
+
+// Find the leftmost-longest substring match, starting at or after `from`.
+// Returns absolute [start, end) offsets or null. The NFA keeps the earliest
+// start per pattern state and then re-runs from that start for the longest end,
+// so a pathological pattern cannot backtrack exponentially.
+export function globFind(pattern, text, from = 0) {
+  const tokens = compileGlob(pattern);
+  const total = tokens.length;
+  const startAt = Math.max(0, Math.min(Number(from) || 0, text.length));
+
+  function addState(map, state, start) {
+    const previous = map.get(state);
+    if (previous === undefined || start < previous) map.set(state, start);
+  }
+  function closeMap(map) {
+    const queue = [...map.keys()];
+    while (queue.length) {
+      const state = queue.pop();
+      const token = tokens[state];
+      if (!token || token.type !== 'star') continue;
+      const start = map.get(state);
+      if (map.has(state + 1)) {
+        if (map.get(state + 1) <= start) continue;
+      }
+      map.set(state + 1, start);
+      queue.push(state + 1);
+    }
+  }
+  let states = new Map();
+  let start = -1;
+  for (let at = startAt; at <= text.length; at++) {
+    addState(states, 0, at);
+    closeMap(states);
+    if (states.has(total)) { start = states.get(total); break; }
+    if (at === text.length) break;
+    const next = new Map();
+    const ch = text[at];
+    for (const [state, origin] of states) {
+      const token = tokens[state];
+      if (!token) continue;
+      if (token.type === 'star') { addState(next, state, origin); continue; }
+      const hit = token.type === 'any'
+        || (token.type === 'lit' && token.ch === ch)
+        || (token.type === 'class' && classMatches(token, ch));
+      if (hit) addState(next, state + 1, origin);
+    }
+    states = next;
+  }
+  if (start < 0) return null;
+
+  const closeSet = set => {
+    const out = new Set(set);
+    const queue = [...set];
+    while (queue.length) {
+      const state = queue.pop();
+      const token = tokens[state];
+      if (!token || token.type !== 'star' || out.has(state + 1)) continue;
+      out.add(state + 1);
+      queue.push(state + 1);
+    }
+    return out;
+  };
+  let active = closeSet(new Set([0]));
+  let end = -1;
+  for (let at = start; at <= text.length; at++) {
+    if (active.has(total)) end = at;
+    if (at === text.length) break;
+    const next = new Set();
+    const ch = text[at];
+    for (const state of active) {
+      const token = tokens[state];
+      if (!token) continue;
+      if (token.type === 'star') { next.add(state); continue; }
+      const hit = token.type === 'any'
+        || (token.type === 'lit' && token.ch === ch)
+        || (token.type === 'class' && classMatches(token, ch));
+      if (hit) next.add(state + 1);
+    }
+    active = closeSet(next);
+  }
+  return end >= start ? { start, end } : null;
 }
 
 export function matchPattern(pattern, text) {
   try {
-    return patternToRegex(pattern).test(text);
+    return globMatch(pattern, text);
   } catch {
     return pattern === text;
   }
@@ -288,51 +402,35 @@ export async function parameterValue(part, scope) {
   }
   if (op === '/' || op === '//') {
     if (missing) return value;
-    let pattern = part.arg ? await expandBracedArg(part.arg, scope) : '';
+    const pattern = part.arg ? await expandBracedArg(part.arg, scope) : '';
     let replacement = '';
-    let global = op === '//';
+    const global = op === '//';
     if (part.replacement !== undefined && part.replacement !== null) {
       replacement = await expandSingle(part.replacement, scope);
     }
     if (!pattern) return value;
-    const regex = patternToRegex(pattern);
-    if (!global) {
-      const source = pattern.replace(/^\^/, '');
-      const plain = unescapePattern(source);
-      if (plain && !MAGIC.test(plain)) {
-        const at = value.indexOf(plain);
-        if (at === -1) return value;
-        return value.slice(0, at) + replacement + value.slice(at + plain.length);
+    // Shell pattern substitution is plain glob matching, not a regular
+    // expression. globFind is an O(pattern x text) NFA, so patterns such as
+    // *a*a*a*...*b cannot backtrack exponentially or hang the shell.
+    let cursor = 0;
+    let out = '';
+    for (;;) {
+      const found = globFind(pattern, value, cursor);
+      if (!found) { out += value.slice(cursor); break; }
+      out += value.slice(cursor, found.start) + replacement;
+      if (!global) { out += value.slice(found.end); break; }
+      if (found.end <= found.start) {
+        if (found.start >= value.length) { out += value.slice(found.start); break; }
+        out += value[found.start];
+        cursor = found.start + 1;
+      } else {
+        cursor = found.end;
+        if (cursor >= value.length) break;
       }
-      const greedy = rematch(regex, value);
-      if (!greedy) return value;
-      return value.slice(0, greedy[0]) + replacement + value.slice(greedy[1]);
     }
-    return replaceAllPattern(value, regex, replacement);
+    return out;
   }
   return value;
-}
-
-function substringBody(regex) {
-  let source = regex.source;
-  if (source.startsWith('^')) source = source.slice(1);
-  if (source.endsWith('$')) source = source.slice(0, -1);
-  return source;
-}
-
-function rematch(regex, text) {
-  const body = new RegExp(substringBody(regex), 's');
-  for (let i = 0; i <= text.length; i++) {
-    const slice = text.slice(i);
-    const m = body.exec(slice);
-    if (m) return [i, i + m[0].length];
-  }
-  return null;
-}
-
-function replaceAllPattern(text, regex, replacement) {
-  const body = new RegExp(substringBody(regex), 'gs');
-  return text.replace(body, () => replacement);
 }
 
 export async function expandArithText(src, scope) {

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { WorkspaceError } from './workspace.mjs';
+import { assertPublicUrl } from './web-tools.mjs';
 
 const IDLE_MS = 3 * 60 * 1000;
 const NAV_TIMEOUT = 20000;
@@ -11,16 +12,21 @@ const VIEWPORT = { width: 1280, height: 900 };
 
 export const BROWSE_TOOL = Object.freeze({
   name: 'strong_browse',
-  description: '无窗口真实 Chrome/Edge：open、snapshot、screenshot、click/type/press、scroll、wait、close；文本模型用 strong_web。',
+  description: '无窗口真实 Chrome/Edge。open 打开网址；snapshot 取正文和可交互元素；view 同时返回正文与截图（MCP 客户端可直接看到图片）；screenshot 保存截图；click/hover/drag/mouse 使用真实鼠标事件；type/press/scroll/wait/close。操作前先 view 定位，操作后 view 验证；只取文本时优先 strong_web。',
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['open', 'snapshot', 'screenshot', 'click', 'type', 'press', 'scroll', 'wait', 'close'] },
+      action: { type: 'string', enum: ['open', 'snapshot', 'view', 'screenshot', 'click', 'hover', 'drag', 'mouse', 'type', 'press', 'scroll', 'wait', 'close'] },
       url: { type: 'string', maxLength: 2000 },
       selector: { type: 'string', maxLength: 500 },
       text: { type: 'string', maxLength: 2000 },
       key: { type: 'string', maxLength: 20 },
+      x: { type: 'number' },
       y: { type: 'number' },
+      toX: { type: 'number' },
+      toY: { type: 'number' },
+      button: { type: 'string', enum: ['left', 'right', 'middle'] },
+      clickCount: { type: 'integer', minimum: 1, maximum: 3 },
       ms: { type: 'integer', minimum: 0, maximum: 30000 },
       fullPage: { type: 'boolean' },
       maxChars: { type: 'integer', minimum: 500, maximum: 20000 },
@@ -73,7 +79,7 @@ function abortReason(signal) {
 }
 
 // Read-only actions that do not need an in-flight wait to run out first.
-export const WAIT_SHORTCUTS = Object.freeze(['snapshot', 'screenshot']);
+export const WAIT_SHORTCUTS = Object.freeze(['snapshot', 'view', 'screenshot']);
 
 /**
  * One interruptible sleep per browser session. A queued snapshot, screenshot or
@@ -133,11 +139,16 @@ class Cdp {
     this.socket = socket;
     this.seq = 0;
     this.pending = new Map();
+    this.listeners = new Map();
     this.closed = false;
     socket.addEventListener('message', event => {
       let payload;
       try { payload = JSON.parse(String(event.data)); } catch { return; }
-      if (!payload.id) return;
+      if (!payload.id) {
+        const handlers = this.listeners.get(payload.method);
+        if (handlers) for (const handler of handlers) { try { handler(payload.params); } catch { /* listener error is non-fatal */ } }
+        return;
+      }
       const entry = this.pending.get(payload.id);
       if (!entry) return;
       this.pending.delete(payload.id);
@@ -146,6 +157,16 @@ class Cdp {
     });
     socket.addEventListener('close', () => this.closeAll());
     socket.addEventListener('error', () => this.closeAll());
+  }
+
+  on(method, handler) {
+    const list = this.listeners.get(method) ?? [];
+    list.push(handler);
+    this.listeners.set(method, list);
+    return () => {
+      const next = (this.listeners.get(method) ?? []).filter(item => item !== handler);
+      if (next.length) this.listeners.set(method, next); else this.listeners.delete(method);
+    };
   }
 
   static connect(url) {
@@ -246,7 +267,29 @@ function pageTarget(list) {
   return pages[0] ?? null;
 }
 
-async function startSession(executable) {
+// Every HTTP(S) request the browser makes — navigation, redirect, subresource,
+// fetch() from page scripts — is paused here and checked against the same
+// public-address policy as strong_web. Without this, open() bypassed SSRF
+// protection entirely and a public page could still reach metadata endpoints.
+async function guardBrowserRequest(cdp, params, session) {
+  const requestId = params?.requestId;
+  const raw = params?.request?.url;
+  if (!requestId || typeof raw !== 'string') return;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      await cdp.send('Fetch.continueRequest', { requestId });
+      return;
+    }
+    await assertPublicUrl(url, session.allowPrivate === true);
+    await cdp.send('Fetch.continueRequest', { requestId });
+  } catch {
+    // Policy denials and DNS failures both fail closed.
+    await cdp.send('Fetch.failRequest', { requestId, errorReason: 'AccessDenied' }).catch(() => {});
+  }
+}
+
+async function startSession(executable, options = {}) {
   const launched = await launch(executable);
   try {
     let target = pageTarget(await fetchJson('http://127.0.0.1:' + launched.port + '/json/list'));
@@ -259,7 +302,11 @@ async function startSession(executable) {
     await cdp.send('Page.enable').catch(() => {});
     await cdp.send('Runtime.enable').catch(() => {});
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
-    return { executable, cdp, ...launched, queue: Promise.resolve(), gate: new WaitGate(), pending: 0, lastUsed: Date.now(), shotSeq: 0, shotDir: path.join(launched.profile, 'shots') };
+    const session = { executable, cdp, ...launched, queue: Promise.resolve(), gate: new WaitGate(), pending: 0, lastUsed: Date.now(), shotSeq: 0, shotDir: path.join(launched.profile, 'shots'), allowPrivate: options.webAllowPrivate === true };
+    cdp.on('Fetch.requestPaused', params => { void guardBrowserRequest(cdp, params, session); });
+    // Do not silently continue when the guard cannot be installed.
+    await cdp.send('Fetch.enable', { patterns: [{ urlPattern: 'http://*', requestStage: 'Request' }, { urlPattern: 'https://*', requestStage: 'Request' }] });
+    return session;
   } catch (error) {
     try { launched.child.kill('SIGKILL'); } catch {}
     children.delete(launched.child);
@@ -289,14 +336,14 @@ async function closeQueued(session) {
 
 async function sessionFor(root, options) {
   const existing = sessions.get(root);
-  if (existing && !existing.cdp.closed) { existing.lastUsed = Date.now(); return existing; }
+  if (existing && !existing.cdp.closed) { existing.lastUsed = Date.now(); existing.allowPrivate = options.webAllowPrivate === true; return existing; }
   if (existing) sessions.delete(root);
   const pending = pendingSessions.get(root);
   if (pending) return pending;
   const promise = (async () => {
     const executable = options.browserPath || findBrowser();
     if (!executable) throw new WorkspaceError('BROWSER_NOT_FOUND', '没有找到 Chrome、Edge 或 Brave。请安装其中之一，或在设置里填写浏览器路径。');
-    const session = await startSession(executable);
+    const session = await startSession(executable, options);
     session.timer = setInterval(() => {
       if (session.pending > 0 || Date.now() - session.lastUsed < IDLE_MS) return;
       clearInterval(session.timer);
@@ -337,11 +384,14 @@ function clip(text, maxChars) {
   return { text: value.slice(0, maxChars), truncated: value.length > maxChars };
 }
 
-async function shot(cdp, session, fullPage = false) {
-  const result = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: Boolean(fullPage) });
+async function shot(cdp, session, fullPage = false, { format = 'png', quality = null } = {}) {
+  const type = format === 'jpeg' ? 'jpeg' : 'png';
+  const params = { format: type, captureBeyondViewport: Boolean(fullPage) };
+  if (type === 'jpeg' && Number.isFinite(quality)) params.quality = Math.min(Math.max(Math.round(quality), 1), 100);
+  const result = await cdp.send('Page.captureScreenshot', params);
   await fs.mkdir(session.shotDir, { recursive: true });
   session.shotSeq += 1;
-  const file = path.join(session.shotDir, 'shot-' + session.shotSeq + '.png');
+  const file = path.join(session.shotDir, 'shot-' + session.shotSeq + (type === 'jpeg' ? '.jpg' : '.png'));
   await fs.writeFile(file, Buffer.from(result.data, 'base64'));
   let width = VIEWPORT.width;
   let height = VIEWPORT.height;
@@ -350,7 +400,7 @@ async function shot(cdp, session, fullPage = false) {
     const size = metrics?.cssContentSize;
     if (size) { width = Math.round(size.width); height = Math.round(size.height); }
   }
-  return { path: file, mediaType: 'image/png', width, height, fullPage: Boolean(fullPage) };
+  return { path: file, mediaType: type === 'jpeg' ? 'image/jpeg' : 'image/png', width, height, fullPage: Boolean(fullPage) };
 }
 
 const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, PageUp: 33, PageDown: 34, Home: 36, End: 35, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39 };
@@ -362,13 +412,74 @@ async function pressKey(cdp, key) {
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
 }
 
-export function selectorExpression(selector, text, mode) {
-  const find = selector
+function findExpression(selector, text) {
+  return selector
     ? 'document.querySelector(' + JSON.stringify(selector) + ')'
     : '[...document.querySelectorAll("a,button,input,textarea,[role=button]")].find(el => (el.innerText || el.value || el.getAttribute("aria-label") || "").includes(' + JSON.stringify(text ?? '') + '))';
+}
+
+export function selectorExpression(selector, text, mode) {
+  const find = findExpression(selector, text);
   if (mode === 'click') return '(el => { if (!el) return false; el.click(); return true; })(' + find + ')';
   return '(el => { if (!el) return false; el.focus(); if (el.select) el.select(); return true; })(' + find + ')';
 }
+
+// Resolve an element to viewport CSS pixels so clicks go through the same
+// hit-testing as a real pointer instead of el.click() (which bypasses overlays
+// and does not fire pointer/mouse coordinates).
+function targetExpression(selector, text) {
+  const find = findExpression(selector, text);
+  return '(() => { const el = ' + find + '; if (!el) return { found: false };'
+    + ' el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });'
+    + ' const r = el.getBoundingClientRect();'
+    + ' if (!r || r.width < 1 || r.height < 1) return { found: true, visible: false, tag: (el.tagName || "").toLowerCase() };'
+    + ' const label = (el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").trim().slice(0, 100);'
+    + ' return { found: true, visible: true, x: r.left + r.width / 2, y: r.top + r.height / 2, width: r.width, height: r.height, tag: (el.tagName || "").toLowerCase(), label };'
+    + ' })()';
+}
+
+async function elementPoint(cdp, selector, text) {
+  const target = await evaluate(cdp, targetExpression(selector, text));
+  if (!target?.found) throw new WorkspaceError('BROWSER_TARGET_MISSING', '没找到目标元素，请给出 selector 或可见文字。');
+  if (!target.visible) throw new WorkspaceError('BROWSER_TARGET_MISSING', '目标元素不可见（宽高为 0）。');
+  if (target.x < 0 || target.y < 0 || target.x > VIEWPORT.width || target.y > VIEWPORT.height) {
+    throw new WorkspaceError('BROWSER_TARGET_MISSING', '目标元素不在可视区域内。');
+  }
+  await delay(60);
+  return target;
+}
+
+const BUTTON_MASK = { left: 1, right: 2, middle: 4 };
+
+async function mouseClick(cdp, point, { button = 'left', clickCount = 1 } = {}) {
+  const mask = BUTTON_MASK[button] ?? 1;
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, button: 'none', buttons: 0 });
+  for (let index = 1; index <= clickCount; index++) {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button, buttons: mask, clickCount: index });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button, buttons: 0, clickCount: index });
+    if (index < clickCount) await delay(40);
+  }
+}
+
+async function mouseDrag(cdp, from, to, button = 'left') {
+  const mask = BUTTON_MASK[button] ?? 1;
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y, button: 'none', buttons: 0 });
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button, buttons: mask, clickCount: 1 });
+  const steps = 12;
+  for (let index = 1; index <= steps; index++) {
+    const x = from.x + ((to.x - from.x) * index) / steps;
+    const y = from.y + ((to.y - from.y) * index) / steps;
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button, buttons: mask });
+    await delay(10);
+  }
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button, buttons: 0, clickCount: 1 });
+}
+
+const INTERACTIVE_STATE = '(() => { const out = []; const nodes = [...document.querySelectorAll("a,button,input,textarea,select,[role=button],[contenteditable=true]")];'
+  + ' for (const el of nodes) { const r = el.getBoundingClientRect(); if (!r || r.width < 1 || r.height < 1) continue;'
+  + ' out.push({ tag: (el.tagName || "").toLowerCase(), text: (el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").trim().slice(0, 80),'
+  + ' id: el.id || undefined, name: el.name || undefined, type: el.type || undefined, href: el.href || undefined, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });'
+  + ' if (out.length >= 40) break; } return out; })()';
 
 async function typeText(cdp, selector, text) {
   const focus = selectorExpression(selector, text, 'focus');
@@ -393,7 +504,11 @@ async function runAction(session, args, signal) {
   if (action === 'open') {
     const url = String(args.url ?? '').trim();
     if (!/^https?:\/\//i.test(url)) throw new WorkspaceError('INVALID_ARGUMENTS', 'open 需要 http(s) 网址。');
-    await session.cdp.send('Page.navigate', { url });
+    // Fail with a clear policy error before navigation; the Fetch guard below
+    // still covers redirects and page-issued requests.
+    await assertPublicUrl(new URL(url), session.allowPrivate === true);
+    const navigation = await session.cdp.send('Page.navigate', { url });
+    if (navigation?.errorText) throw new WorkspaceError('BROWSER_NAVIGATION_FAILED', '导航失败：' + navigation.errorText);
     await waitReady(session.cdp);
     const state = await evaluate(session.cdp, PAGE_STATE);
     const body = clip(state.text, maxChars);
@@ -401,8 +516,16 @@ async function runAction(session, args, signal) {
   }
   if (action === 'snapshot') {
     const state = await evaluate(session.cdp, PAGE_STATE);
+    const elements = await evaluate(session.cdp, INTERACTIVE_STATE).catch(() => []);
     const body = clip(state.text, maxChars);
-    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated };
+    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, elements };
+  }
+  if (action === 'view') {
+    const state = await evaluate(session.cdp, PAGE_STATE);
+    const elements = await evaluate(session.cdp, INTERACTIVE_STATE).catch(() => []);
+    const image = await shot(session.cdp, session, args.fullPage === true, { format: 'jpeg', quality: 78 });
+    const body = clip(state.text, maxChars);
+    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, elements, screenshot: image, note: '已返回页面截图：' + image.path };
   }
   if (action === 'screenshot') {
     const state = await evaluate(session.cdp, PAGE_STATE);
@@ -410,12 +533,47 @@ async function runAction(session, args, signal) {
     return { action, url: state.url, title: state.title, screenshot: image, note: '截图已保存：' + image.path };
   }
   if (action === 'click') {
-    const done = await evaluate(session.cdp, selectorExpression(args.selector, args.text, 'click'));
-    if (!done) throw new WorkspaceError('BROWSER_TARGET_MISSING', '没找到要点击的元素，请给出 selector 或可见文字。');
+    const point = await elementPoint(session.cdp, args.selector, args.text);
+    await mouseClick(session.cdp, point, { button: args.button ?? 'left', clickCount: args.clickCount ?? 1 });
+    await delay(300);
+    await waitReady(session.cdp).catch(() => {});
+    const state = await evaluate(session.cdp, PAGE_STATE);
+    const body = clip(state.text, maxChars);
+    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, clicked: { tag: point.tag, label: point.label, x: point.x, y: point.y } };
+  }
+  if (action === 'hover') {
+    const point = await elementPoint(session.cdp, args.selector, args.text);
+    await session.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, button: 'none', buttons: 0 });
     await delay(200);
     const state = await evaluate(session.cdp, PAGE_STATE);
     const body = clip(state.text, maxChars);
-    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated };
+    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, hovered: { tag: point.tag, label: point.label, x: point.x, y: point.y } };
+  }
+  if (action === 'drag') {
+    const from = await elementPoint(session.cdp, args.selector, args.text);
+    const toX = Number(args.toX);
+    const toY = Number(args.toY);
+    if (!Number.isFinite(toX) || !Number.isFinite(toY)) throw new WorkspaceError('INVALID_ARGUMENTS', 'drag 需要 toX 和 toY（目标坐标，可先用 snapshot 的 elements 取得）。');
+    await mouseDrag(session.cdp, from, { x: toX, y: toY }, args.button ?? 'left');
+    await delay(200);
+    const state = await evaluate(session.cdp, PAGE_STATE);
+    const body = clip(state.text, maxChars);
+    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, dragged: { from: { x: from.x, y: from.y, tag: from.tag }, to: { x: toX, y: toY } } };
+  }
+  if (action === 'mouse') {
+    let point;
+    if (args.selector || args.text) point = await elementPoint(session.cdp, args.selector, args.text);
+    else {
+      const x = Number(args.x);
+      const y = Number(args.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new WorkspaceError('INVALID_ARGUMENTS', 'mouse 需要 x、y 或 selector/text。');
+      point = { x, y, tag: 'coordinate', label: '' };
+    }
+    await mouseClick(session.cdp, point, { button: args.button ?? 'left', clickCount: args.clickCount ?? 1 });
+    await delay(200);
+    const state = await evaluate(session.cdp, PAGE_STATE);
+    const body = clip(state.text, maxChars);
+    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, clicked: { tag: point.tag, label: point.label, x: point.x, y: point.y } };
   }
   if (action === 'type') {
     const done = await typeText(session.cdp, args.selector, args.text);
@@ -431,7 +589,13 @@ async function runAction(session, args, signal) {
   }
   if (action === 'scroll') {
     const offset = Number.isFinite(Number(args.y ?? 600)) ? Number(args.y ?? 600) : 600;
-    const position = await evaluate(session.cdp, 'window.scrollBy(0, ' + offset + '), window.scrollY');
+    const x = Number.isFinite(Number(args.x)) ? Number(args.x) : VIEWPORT.width / 2;
+    const y = VIEWPORT.height / 2;
+    // A real wheel event scrolls nested scroll containers and fires the same
+    // listeners as user input; window.scrollBy() did neither.
+    await session.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY: offset });
+    await delay(150);
+    const position = await evaluate(session.cdp, 'window.scrollY');
     return { action, scrollY: position };
   }
   if (action === 'wait') {
