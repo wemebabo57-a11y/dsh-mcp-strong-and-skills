@@ -6,6 +6,7 @@ import { registerSettingsHost } from './settings-host.mjs';
 import { installNativePolicy } from './native-policy.mjs';
 import { resolveShellSandbox } from './sandbox.mjs';
 import { installShellAdoption } from './adoption.mjs';
+import { portableSchema } from './schema-portable.mjs';
 
 export const name = 'strong-skills';
 export const inject = ['tools', 'systemPrompt', 'workingDirectory'];
@@ -112,7 +113,7 @@ export function apply(ctx, options = {}) {
   } });
   for (const tool of ALL_TOOLS) {
     ctx.tools.register({
-      name: tool.name, description: tool.description, parameters: tool.inputSchema,
+      name: tool.name, description: tool.description, parameters: portableSchema(tool.inputSchema),
       output: { schema: { type: 'object', additionalProperties: true },
         render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }, ...(value && typeof value === 'object' ? screenshotBlocks.get(value) ?? [] : [])] },
       isConcurrencySafe: () => tool.name !== 'strong_shell' && tool.name !== 'strong_desktop',

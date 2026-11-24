@@ -1,5 +1,16 @@
 # 更新记录
 
+## 0.4.4-preview.2 — 2026-11-24（0.4.4 预览版 2：实测 bug 修复 + PTC 类型恢复）
+
+包版本：`0.4.4-preview.2`。工具面、开关与配置字段不变；修复另一轮实测发现的 13 个问题，让 run_code 里 strong_* 的参数类型恢复精确。
+
+- **PTC 类型（重要）**：新增 `src/schema-portable.mjs`——注册宿主时把 inputSchema 过滤为 DSH 类型生成器支持的关键字（`type/oneOf/properties/required/additionalProperties/items/enum/const` + `description/title/default/examples`），`properties` 保留全部参数名、只净化 schema 值；此前 min/max/length 约束键会让整个 schema 降级为 `unknown`。插件内部校验仍用完整 schema，边界检查不丢；新增 2 项守护测试。
+- **strong_web**：`open` 描述改为 `target`（结果 id，如 r1）或网址（旧文案误写为 `id`，按描述调用必失败），并写明 maxChars 500–20000。
+- **strong_code**：symbols 声明正则改用 Unicode 字母/数字模式，`计算`/`列表` 等非 ASCII 标识符不再漏报（note 同步更新）；diagnostics 缺 text 的报错说明需粘贴编译器/ESLint 输出；排除项新增 `excludedReasons`（按原因计数）与 `excludedItems`（前 10 条：路径/行/原因），工作区外、密钥、符号链接等路径不再静默消失。
+- **strong_review / 工作区 diff**：diff 先探测所选路径所在的仓库（支持工作区内的嵌套 git 仓库），工作区根仍在同一仓库内时保持从根运行、路径口径不变；否则在仓库顶层运行并把变更名单逐个映射回工作区相对路径，越出工作区的变更按 `outsideWorkspace` 跳过。
+- **strong_browse**：`press` 支持组合键（Ctrl/Alt/Shift/Meta，如 Ctrl+A、Ctrl+Enter），单字母/数字映射美式虚拟键码；selector/文字命中多个元素时优先取可见元素，可用 1 起始的 `index` 选第几个，隐藏重复元素不再挡住第一个可见元素；按文字定位扩展到 li/div/span/p/标题与 role=menuitem/option/tab 等，精确匹配优先；`type` 无 selector 时写入当前焦点输入框（否则要求先 click 或给 selector）；`mouse` 坐标点击不再每次返回整页正文（正文用 snapshot/view 获取）；`close` 之后的动作报 `BROWSER_NOT_OPEN` 并要求先 open，不再静默新建 about:blank 会话。
+- **测试**：shell 测试临时目录清理加 maxRetries/retryDelay，修复 Windows 上 EBUSY 稳定挂起；新增 Unicode 标识符、嵌套仓库 diff、组合键解析、可见元素与 index 选择、close 状态与 portable schema 守护用例。
+
 ## 0.4.4-preview.1 — 2026-11-23（0.4.4 预览版 1：安全审计收尾 + 浏览器真实交互 + 桌面自动化）
 
 包版本：`0.4.4-preview.1`。默认 6 个入口不变；按需技能从 8 个增至 11 个，`strong_browse` 新增页面查看与真实鼠标动作，新增默认关闭的 `strong_desktop`（Windows 全局键鼠、窗口与截图）。

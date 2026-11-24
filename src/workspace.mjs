@@ -173,6 +173,30 @@ async function gitContainsRoot(root, signal) {
   } catch { return false; }
 }
 
+// Resolve the repository top that contains `directory`, even when that
+// repository is nested below the workspace root. Walks up when the directory
+// itself does not exist yet, so a selection inside a repo still resolves.
+async function gitTopFor(directory, signal) {
+  let current = directory;
+  for (;;) {
+    if (!(await hasGitAncestor(current))) return null;
+    const result = await runGit(current, ['rev-parse', '--show-toplevel'], { signal, maxBytes: 16384 });
+    if (result.code === 0 && !result.truncated) {
+      try { return await fs.realpath(result.stdout.replace(/\r?\n$/, '')); } catch { return null; }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+// Path of `target` relative to a repository top, with '/' separators; '.' when
+// the selection is the top itself.
+function relativeFromTop(top, target) {
+  const value = path.relative(top, target).replace(/\\/g, '/');
+  return value === '' ? '.' : value;
+}
+
 async function disabledGitFilters(root, signal) {
   // Git's clean/process filters can run during diff even with --no-textconv.
   // Enumerate their config keys (without executing them), then disable every
@@ -434,9 +458,19 @@ export class Workspace {
       if (!['unstaged', 'staged', 'all'].includes(scope)) throw new WorkspaceError('INVALID_ARGUMENTS', 'Diff scope must be unstaged, staged, or all.');
       // Disable user-configured external diff and text conversion executables.
       const base = ['--literal-pathspecs', '--no-pager', 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-color', '--relative', ...(scope === 'staged' ? ['--cached'] : scope === 'all' ? ['HEAD'] : [])];
-      const gitAllowed = await gitContainsRoot(root, signal);
-      const filterOverrides = gitAllowed ? await disabledGitFilters(root, signal) : null;
-      const names = filterOverrides !== null ? await runGit(root, [...filterOverrides, ...base, '--name-only', '-z', '--', selected.relative || '.'], { signal, maxBytes: Math.min(4 * 1024 * 1024, this.maxFiles * 1024) }) : { code: -1, stdout: '', truncated: false };
+      // The selection may live in a repository nested below the workspace root.
+      // Probe the repository that actually contains it; keep running Git from
+      // the workspace root while that root is inside the same repository (names
+      // stay workspace-relative), otherwise run at the repo top and map every
+      // changed name back into the workspace, skipping names outside of it.
+      const selectedAbs = path.resolve(root, selected.relative || '.');
+      const probeDir = selected.stat?.isFile?.() === true ? path.dirname(selectedAbs) : selectedAbs;
+      const repoTop = await gitTopFor(probeDir, signal);
+      const runDir = repoTop !== null && inside(repoTop, root) ? root : repoTop;
+      const gitAllowed = runDir !== null;
+      const filterOverrides = gitAllowed ? await disabledGitFilters(runDir, signal) : null;
+      const selectedFromRunDir = runDir !== null && runDir !== root ? relativeFromTop(runDir, selectedAbs) : (selected.relative || '.');
+      const names = filterOverrides !== null ? await runGit(runDir, [...filterOverrides, ...base, '--name-only', '-z', '--', selectedFromRunDir], { signal, maxBytes: Math.min(4 * 1024 * 1024, this.maxFiles * 1024) }) : { code: -1, stdout: '', truncated: false };
       result.available = names.code === 0 || names.truncated;
       result.diff = '';
       result.scope = scope === 'staged' ? 'Staged tracked changes; unstaged and untracked content are not included.' : scope === 'all' ? 'Tracked changes against HEAD; untracked content is not included.' : 'Unstaged tracked changes; staged and untracked content are not included.';
@@ -445,28 +479,34 @@ export class Workspace {
         const changed = names.stdout.split('\0');
         if (names.truncated) changed.pop();
         const safe = [];
+        const runPaths = [];
         // Windows command lines are limited to roughly 32K characters. Count
         // conservative quoting overhead as well as the filter overrides.
-        let argumentChars = root.length * 2 + filterOverrides.join('').length * 2 + 1024;
+        let argumentChars = runDir.length * 2 + filterOverrides.join('').length * 2 + 1024;
         for (const name of changed.filter(Boolean)) {
           abortIfNeeded(signal);
-          const segments = name.split('/');
+          // Git prints names relative to its working directory (runDir); map
+          // them back into workspace-relative paths and skip anything outside.
+          const workspaceRelative = runDir === root ? name : path.relative(root, path.join(runDir, name)).replace(/\\/g, '/');
+          if (runDir !== root && (!workspaceRelative || workspaceRelative.startsWith('../') || path.isAbsolute(workspaceRelative))) { recordSkip(stats, 'outsideWorkspace'); continue; }
+          const segments = workspaceRelative.split('/');
           if (segments.some(deniedSegment)) { recordSkip(stats, 'secret'); continue; }
           if (segments.slice(0, -1).some((part) => SKIP_DIRS.has(part.toLowerCase()))) { recordSkip(stats, 'excludedDirectory'); continue; }
-          if (BINARY_EXTENSIONS.has(path.extname(name).toLowerCase())) { recordSkip(stats, 'binary'); continue; }
-          if (safe.length >= this.maxFiles || argumentChars + name.length * 2 + 3 > 28000) { stats.scanLimitReached = true; break; }
+          if (BINARY_EXTENSIONS.has(path.extname(workspaceRelative).toLowerCase())) { recordSkip(stats, 'binary'); continue; }
+          if (safe.length >= this.maxFiles || argumentChars + workspaceRelative.length * 2 + 3 > 28000) { stats.scanLimitReached = true; break; }
           try {
-            const checked = await this._resolve(root, name, { signal, cache, allowMissing: true });
+            const checked = await this._resolve(root, workspaceRelative, { signal, cache, allowMissing: true });
             if (checked.stat && (!checked.stat.isFile() || checked.stat.size > this.maxFileBytes)) { recordSkip(stats, 'largeFile'); continue; }
-            safe.push(name);
-            argumentChars += name.length * 2 + 3;
+            safe.push(workspaceRelative);
+            runPaths.push(name);
+            argumentChars += workspaceRelative.length * 2 + 3;
           } catch (error) {
             if (error.code === 'ABORTED') throw error;
             recordSkip(stats, error.code === 'DISALLOWED_SYMLINK' ? 'symlink' : 'unavailable');
           }
         }
         if (safe.length) {
-          const diff = await runGit(root, [...filterOverrides, ...base, '--', ...safe], { signal, maxBytes: this.maxOutputChars * 4 });
+          const diff = await runGit(runDir, [...filterOverrides, ...base, '--', ...runPaths], { signal, maxBytes: this.maxOutputChars * 4 });
           result.available = diff.code === 0 || diff.truncated;
           result.diff = diff.stdout;
           stats.scannedFiles = safe.length;

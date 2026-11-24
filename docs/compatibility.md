@@ -1,6 +1,16 @@
 # DeepSeek Harness compatibility
 
-Initial contract review on 2026-10-24; updated for 0.4.4-preview.1 on 2026-11-23 and for v0.4.3 on 2026-11-22 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
+Initial contract review on 2026-10-24; updated for 0.4.4-preview.2 on 2026-11-24, for 0.4.4-preview.1 on 2026-11-23 and for v0.4.3 on 2026-11-22 against official upstream source and real DSH 0.2.1-rc.3/rc.5 components (rc.3-compatible contracts).
+
+## 0.4.4-preview.2 measured-bug fixes and PTC-typed tool schemas — 2026-11-24
+
+Version 0.4.4-preview.2 fixes thirteen issues found by a black-box test pass. The tool surface, switches and configuration keys are unchanged; the measured resident budget for the six default entries is **1,491** estimated tokens (1,477 in preview.1), Shell **1,849**, desktop **1,974**, Shell plus desktop **2,331**, compact **516**, and compact plus Shell **873**.
+
+**PTC type generation.** The host's `jsonSchemaToTs` accepts only `type/oneOf/properties/required/additionalProperties/items/enum/const` plus `description/title/default/examples`; any other keyword (minLength, maxLength, minimum, maximum, pattern, …) raises `JsonSchemaError` and degrades the whole parameters schema to `unknown`. Registration now passes `portableSchema(tool.inputSchema)`: property names are preserved, constraint keywords are stripped, and `enum/const/default/examples` are copied as data. The engine still validates the original schema, so min/max/length limits are enforced; the host simply no longer sees them.
+
+**Behavior fixes.** `strong_web` documents `open` as `target` (result id like r1) or a full URL, with `maxChars` 500–20000. `strong_code` symbols match Unicode identifiers, diagnostics explain the required raw compiler/ESLint text and report `excludedReasons`/`excludedItems` instead of silently dropping paths. Workspace `diff` probes the repository that contains the selection, including a nested repository below the workspace root, and maps changed names back to workspace-relative paths. `strong_browse` accepts modifier combos in `press` (`Ctrl+A`, `Ctrl+Enter`), prefers visible elements with a 1-based `index`, locates text in li/div/span menus and role=menuitem/option/tab nodes, types into the focused editable when no selector is given, returns no page body from coordinate `mouse` clicks, and rejects actions after `close` with `BROWSER_NOT_OPEN` until `open` runs again. Windows test cleanup retries `EBUSY` removals.
+
+**Verification.** `node --test` passes **459 tests**, `node scripts/check.mjs` and `node scripts/build-ui.mjs --check` pass. A real headless Edge probe (`scripts/probe-preview2.mjs`) confirmed visible-element targeting with a hidden duplicate, text clicks on a `role=menuitem` div, typing into the focused input, `Ctrl+A` replacement, `index: 2` picking the second button, `mouse` returning no page body, and `BROWSER_NOT_OPEN` after `close`. These numbers are character heuristics, not tokenizer or billing measurements.
 
 ## 0.4.4-preview.1 security-audit closure, browser interaction and Windows desktop automation — 2026-11-23
 

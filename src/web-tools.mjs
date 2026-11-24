@@ -97,7 +97,7 @@ export const WEB_OPEN_CACHE_BYTES = OPEN_CACHE_BYTES;
 
 export const WEB_TOOL = Object.freeze({
   name: 'strong_web',
-  description: '联网搜索与抓正文，不启动浏览器；search 返回 id/标题/网址/摘要，open 按 id 或网址读取。',
+  description: '联网搜索与抓正文，不启动浏览器；search 返回 id/标题/网址/摘要，open 用 target（如 r1）或网址；maxChars 500–20000。',
   inputSchema: {
     type: 'object',
     properties: {

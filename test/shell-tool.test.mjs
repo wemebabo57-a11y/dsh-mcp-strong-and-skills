@@ -11,7 +11,7 @@ async function workspace(t) {
   const parent = await fs.realpath(os.tmpdir());
   const root = await fs.mkdtemp(path.join(parent, 'strong-shell-'));
   await fs.mkdir(path.join(root, 'src'));
-  t.after(async () => { assert.equal(path.dirname(root), parent); await fs.rm(root, { recursive: true, force: true }); });
+  t.after(async () => { assert.equal(path.dirname(root), parent); await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return root;
 }
 

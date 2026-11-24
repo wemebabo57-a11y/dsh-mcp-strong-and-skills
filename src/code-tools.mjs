@@ -35,7 +35,7 @@ function validate(name, args) {
   if (!tool) throw new WorkspaceError('INVALID_TOOL', 'Unknown code tool.');
   try { validateSchema(tool.inputSchema, args); }
   catch (error) { throw new WorkspaceError('INVALID_ARGUMENTS', error.message); }
-  if (name === 'strong_code' && args.action === 'diagnostics' && (typeof args.text !== 'string' || !args.text.trim())) throw new WorkspaceError('INVALID_ARGUMENTS', 'diagnostics requires nonempty text.');
+  if (name === 'strong_code' && args.action === 'diagnostics' && (typeof args.text !== 'string' || !args.text.trim())) throw new WorkspaceError('INVALID_ARGUMENTS', 'diagnostics requires nonempty text: paste the raw compiler/ESLint/test output containing path:line:column; passing only a path is not supported.');
 }
 
 // Reduce complete JSON values; output is never a sliced JSON string.
@@ -168,15 +168,22 @@ async function sourceFiles(workspace, selected, signal, includeRootInventory = f
   return { sources, inventory: roots.files ?? [], truncated: Boolean(truncated), scannedFiles: sources.length, scannedLines: lineCount, skipped: map.skipped ?? {}, limits };
 }
 
+// Unicode-aware identifiers (letters/digits/marks per ECMAScript ID rules) so
+// non-ASCII names like 计算 are reported like Beta; matched by pattern, not
+// validated per language.
+const NAME = '[\\p{L}\\p{Nl}$_][\\p{L}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}$]*';
+const id = (pattern) => new RegExp(pattern, 'gu');
+const EXPORT_BRACE = new RegExp('^(?:type\\s+)?(' + NAME + ')(?:\\s+as\\s+(' + NAME + '))?$', 'u');
+
 const DECLARATIONS = Object.freeze([
-  ['function', /\b(?:function\s*\*?\s+|(?:async\s+)?def\s+|fn\s+)([A-Za-z_$][\w$]*)/g],
-  ['function', /^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(/g],
-  ['class', /\bclass\s+([A-Za-z_$][\w$]*)/g],
-  ['interface', /\binterface\s+([A-Za-z_$][\w$]*)/g],
-  ['type', /\b(?:type|enum|struct|trait)\s+([A-Za-z_$][\w$]*)/g],
-  ['function', /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^;]*\)|[A-Za-z_$][\w$]*)\s*=>/g],
-  ['export', /\bexport\s+(?:default\s+)?(?:async\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g],
-  ['method', /^\s*(?!(?:if|for|while|switch|catch|with|return|function|class)\b)(?:(?:async|static|get|set)\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g],
+  ['function', id('\\b(?:function\\s*\\*?\\s+|(?:async\\s+)?def\\s+|fn\\s+)(' + NAME + ')')],
+  ['function', id('^\\s*func\\s+(?:\\([^)]*\\)\\s*)?(' + NAME + ')\\s*\\(')],
+  ['class', id('\\bclass\\s+(' + NAME + ')')],
+  ['interface', id('\\binterface\\s+(' + NAME + ')')],
+  ['type', id('\\b(?:type|enum|struct|trait)\\s+(' + NAME + ')')],
+  ['function', id('\\b(?:const|let|var)\\s+(' + NAME + ')\\s*=\\s*(?:async\\s+)?(?:\\([^;]*\\)|' + NAME + ')\\s*=>')],
+  ['export', id('\\bexport\\s+(?:default\\s+)?(?:async\\s+)?(?:const|let|var)\\s+(' + NAME + ')')],
+  ['method', id('^\\s*(?!(?:if|for|while|switch|catch|with|return|function|class)\\b)(?:(?:async|static|get|set)\\s+)*(' + NAME + ')\\s*\\([^)]*\\)\\s*\\{')],
 ]);
 
 function symbols(scan, limit, signal) {
@@ -204,7 +211,7 @@ function symbols(scan, limit, signal) {
       if (!line.includes('export')) continue;
       const exports = line.match(/\bexport\s*\{([^}]+)\}/);
       if (exports) for (const entry of exports[1].split(',')) {
-        const name = entry.trim().match(/^(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+        const name = entry.trim().match(EXPORT_BRACE);
         if (!name) continue;
         if (items.length >= limit) { more = true; break outer; }
         items.push({ path: file.path, line: index + 1, name: name[2] ?? name[1], kind: 'export', exported: true });
@@ -212,7 +219,7 @@ function symbols(scan, limit, signal) {
     }
   }
   return { action: 'symbols', items, scannedFiles: scan.scannedFiles, scannedLines: scan.scannedLines, skipped: scan.skipped, truncated: scan.truncated || more,
-    note: 'Heuristic declarations, not an AST or reference index; JS/TS plus basic Python/Go/Rust declarations. Comments/literals excluded; multiline, Unicode names and template interpolations may be missed. At most ' + scan.limits.files + ' files, ' + scan.limits.lines + ' lines and ' + scan.limits.reads + ' reads.' };
+    note: 'Heuristic declarations, not an AST or reference index; JS/TS plus basic Python/Go/Rust declarations. Comments/literals excluded; multiline declarations and template interpolations may be missed. Unicode identifiers are matched by Unicode letter/digit patterns, not validated per language. At most ' + scan.limits.files + ' files, ' + scan.limits.lines + ' lines and ' + scan.limits.reads + ' reads.' };
 }
 
 const IMPORT_EXTENSIONS = Object.freeze(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs', '.json']);
@@ -354,20 +361,27 @@ async function diagnostics(workspace, args, signal) {
   const parsed = diagnosticLines(args.text);
   const items = [];
   let excluded = 0;
+  const excludedReasons = {};
+  const excludedItems = [];
+  const record = (entry, reason) => {
+    excluded += 1;
+    excludedReasons[reason] = (excludedReasons[reason] ?? 0) + 1;
+    if (excludedItems.length < 10) excludedItems.push({ path: clipped(entry.path, 200), line: entry.line, reason });
+  };
   for (const entry of parsed.slice(0, limit)) {
     cancelled(signal);
     const name = diagnosticPath(entry.path, workspace);
-    if (!name || !Number.isSafeInteger(entry.line) || entry.line < 1 || !Number.isSafeInteger(entry.column) || entry.column < 1) { excluded++; continue; }
+    if (!name || !Number.isSafeInteger(entry.line) || entry.line < 1 || !Number.isSafeInteger(entry.column) || entry.column < 1) { record(entry, name ? 'invalidLocation' : 'outsideWorkspace'); continue; }
     try {
       const read = await workspace.run({ action: 'read', path: name, start: Math.max(1, entry.line - 1), limit: 3 }, { signal });
       items.push({ path: read.path, line: entry.line, column: entry.column, message: entry.message, context: read.lines ?? [] });
     } catch (error) {
       if (error.code === 'ABORTED' || signal?.aborted) throw error;
-      excluded++;
+      record(entry, error.code === 'SECRET_PATH' ? 'secret' : error.code === 'PATH_ESCAPE' ? 'escaped' : error.code === 'INVALID_PATH' ? 'invalidPath' : 'unavailable');
     }
   }
-  return { action: 'diagnostics', items, parsed: parsed.length, excluded, truncated: parsed.length > limit, executed: false,
-    note: 'Parses common path:line:column, TypeScript, ESLint stylish and Python traceback locations. Messages are pasted data, not verified failures; inaccessible, secret and outside-workspace paths are excluded.' };
+  return { action: 'diagnostics', items, parsed: parsed.length, excluded, excludedReasons, excludedItems, truncated: parsed.length > limit, executed: false,
+    note: 'Parses common path:line:column, TypeScript, ESLint stylish and Python traceback locations. Messages are pasted data, not verified failures; inaccessible, secret and outside-workspace paths are excluded — excludedReasons counts each cause and excludedItems lists the first ten.' };
 }
 
 const RISKS = [

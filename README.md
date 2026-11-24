@@ -9,7 +9,7 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 [![CI](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/wemebabo57-a11y/dsh-mcp-strong-and-skills/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-cb603f?style=flat-square)](LICENSE)
 [![Runtime dependencies: 0](https://img.shields.io/badge/runtime_dependencies-0-242720?style=flat-square)](package.json)
-[![Tests: 456](https://img.shields.io/badge/tests-456-6d7950?style=flat-square)](test)
+[![Tests: 459](https://img.shields.io/badge/tests-459-6d7950?style=flat-square)](test)
 
 [快速开始](#快速开始) · [插件设置](#插件设置) · [三种增强模式](#三种增强模式) · [能力一览](#能力一览) · [MCP 接入](#mcp-接入) · [上下文预算](#上下文预算)
 
@@ -18,6 +18,10 @@ On-demand skills. Bounded by default. Unlimited when you ask.
 ![11 个按需技能、6 个默认工具入口、接入沙箱的 Shell、可选真实桌面操作、轻量上下文](docs/assets/hero.svg)
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的编码增强插件。**所有模型共享通用增强，DeepSeek V4 Pro 与 V4.1 Flash 1017 再获得专用工作策略；需要时可以开启完全不省 token 的无限模式。** 内置 11 个按需技能、6 个默认工具入口（含联网搜索与真实后台浏览器）、可选的 Shell 工具（Windows 沙箱下自动使用插件内置 Bash；非受限时优先 Git Bash，也可选 WSL、PowerShell 7、cmd 或内置 Bash）、可选的 Windows 桌面工具（全局真实鼠标/键盘、窗口与全屏截图）、可关闭的增强思考，以及独立的 stdio MCP 服务。
+
+**0.4.4-preview.2 修复一轮实测 bug，并让工具 schema 被 DSH 的 PTC 类型生成器接受：** `strong_web` 的 `open` 描述改为 `target`（结果 id 或网址）并写明 maxChars 500–20000；注册宿主时用 `portableSchema` 过滤工具 schema，run_code 里 strong_* 的参数从 `unknown` 恢复为精确类型；`strong_code` symbols 支持 Unicode 标识符，diagnostics 报告排除原因（`excludedReasons`/`excludedItems`）；工作区 diff 支持工作区内的嵌套 git 仓库；`strong_browse` 的 `press` 支持组合键（Ctrl+A、Ctrl+Enter），selector/文字命中多元素时优先可见元素并可用 1 起始的 `index` 选第几个，`type` 无 selector 时写入当前焦点，`mouse` 点击不再每次返回整页正文，`close` 之后的动作明确要求先 `open`；Windows 上测试临时目录清理加 maxRetries 重试，修复 EBUSY 稳定挂起。
+
+**0.4.4-preview.2 验证：** 459 项自动化测试、`node scripts/check.mjs` 与 `node scripts/build-ui.mjs --check` 通过；真实 Edge 无头浏览器复验隐藏重复元素下点击第一个可见输入框、按文字点中 div 菜单项、无 selector 输入到焦点、`Ctrl+A` 后重输替换文本、`index` 选第二个按钮、`mouse` 不返回正文与 `close` 后动作报错。实测脚本见 `scripts/probe-preview2.mjs`。
 
 **0.4.4-preview.1 完成安全审计收尾，并把浏览器与桌面变成可真实操作的工具：** 修复审查发现的 14 项越权、数据丢失、正则挂起与命令注入问题，补齐 Shell/coreutils 的低危语义缺口；`strong_browse` 新增 `view`（正文、最多 40 个可交互元素及坐标、JPEG 截图），`click`/`hover`/`drag`/`mouse` 改为 CDP 真实鼠标事件，`scroll` 使用真实滚轮，并在导航前与每个页面请求前执行同一套 SSRF 检查；新增默认关闭的 `strong_desktop`（Windows 全局真实鼠标/键盘、窗口枚举与切换、全屏截图），只在扩展工具且显式开启时注册。MCP 会把浏览器与桌面截图作为 image content 返回，客户端支持图片时模型可直接查看页面或桌面。按需技能由 8 个增至 11 个。
 

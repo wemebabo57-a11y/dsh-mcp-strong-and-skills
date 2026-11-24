@@ -12,7 +12,7 @@ const VIEWPORT = { width: 1280, height: 900 };
 
 export const BROWSE_TOOL = Object.freeze({
   name: 'strong_browse',
-  description: '无窗口真实 Chrome/Edge。open 打开网址；snapshot 取正文和可交互元素；view 同时返回正文与截图（MCP 客户端可直接看到图片）；screenshot 保存截图；click/hover/drag/mouse 使用真实鼠标事件；type/press/scroll/wait/close。操作前先 view 定位，操作后 view 验证；只取文本时优先 strong_web。',
+  description: '无窗口真实 Chrome/Edge。open 打开网址；snapshot 取正文和可交互元素；view 返回正文与截图；screenshot 保存截图；click/hover/drag/mouse 真实鼠标；type 写输入框（无 selector 写当前焦点）；press 支持组合键（Ctrl+A 等）；scroll/wait/close；多命中用 index 选第几个。只取文本优先 strong_web。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -20,6 +20,7 @@ export const BROWSE_TOOL = Object.freeze({
       url: { type: 'string', maxLength: 2000 },
       selector: { type: 'string', maxLength: 500 },
       text: { type: 'string', maxLength: 2000 },
+      index: { type: 'integer', minimum: 1 },
       key: { type: 'string', maxLength: 20 },
       x: { type: 'number' },
       y: { type: 'number' },
@@ -39,6 +40,9 @@ export const BROWSE_TOOL = Object.freeze({
 const sessions = new Map();
 const pendingSessions = new Map();
 const children = new Set();
+// Roots closed by an explicit close action; actions on them must fail instead
+// of silently relaunching a blank session.
+const closedRoots = new Set();
 
 function browserCandidates() {
   const env = process.env;
@@ -404,22 +408,67 @@ async function shot(cdp, session, fullPage = false, { format = 'png', quality = 
 }
 
 const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, PageUp: 33, PageDown: 34, Home: 36, End: 35, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39 };
+const MODIFIER_CODES = { ctrl: 2, control: 2, alt: 1, option: 1, shift: 8, meta: 4, cmd: 4, command: 4, win: 4 };
 
-async function pressKey(cdp, key) {
-  const code = KEY_CODES[key];
-  if (!code) throw new WorkspaceError('INVALID_ARGUMENTS', 'press 只支持：' + Object.keys(KEY_CODES).join('、'));
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
+// "Ctrl+A" / "Ctrl+Enter" / "Shift+a" → CDP key parameters: modifier mask,
+// virtual key code and the character a printable key inserts. Named keys come
+// from KEY_CODES; single letters and digits map to US-layout virtual keys.
+export function parseKey(spec) {
+  const raw = String(spec ?? '').trim();
+  if (!raw) throw new WorkspaceError('INVALID_ARGUMENTS', 'press 需要 key，例如 Enter、Ctrl+A、Ctrl+Enter。');
+  const tokens = raw.split('+').map((part) => part.trim());
+  if (tokens.some((part) => !part)) throw new WorkspaceError('INVALID_ARGUMENTS', '无法识别按键：' + raw);
+  const name = tokens[tokens.length - 1];
+  let mask = 0;
+  for (const token of tokens.slice(0, -1)) {
+    const code = MODIFIER_CODES[token.toLowerCase()];
+    if (!code) throw new WorkspaceError('INVALID_ARGUMENTS', '不支持的修饰键：只支持 Ctrl/Alt/Shift/Meta，例如 Ctrl+A、Ctrl+Enter。');
+    mask |= code;
+  }
+  const canonical = name.length === 1 ? name : name.charAt(0).toUpperCase() + name.slice(1);
+  const special = KEY_CODES[canonical];
+  if (special) return { key: canonical, code: special, mask, text: undefined };
+  if (/^[a-zA-Z]$/.test(name)) {
+    const key = (mask & MODIFIER_CODES.shift) ? name.toUpperCase() : name.toLowerCase();
+    return { key, code: key.toUpperCase().charCodeAt(0), mask, text: (mask & (MODIFIER_CODES.ctrl | MODIFIER_CODES.alt | MODIFIER_CODES.meta)) ? undefined : key };
+  }
+  if (/^[0-9]$/.test(name)) {
+    return { key: name, code: 48 + Number(name), mask, text: (mask & (MODIFIER_CODES.ctrl | MODIFIER_CODES.alt | MODIFIER_CODES.meta)) ? undefined : name };
+  }
+  throw new WorkspaceError('INVALID_ARGUMENTS', '不支持的按键：' + name + '。支持 Enter/Tab/Escape/Backspace/Delete/PageUp/PageDown/Home/End/Arrow*、单个字母或数字，可加 Ctrl/Alt/Shift/Meta。');
 }
 
-function findExpression(selector, text) {
-  return selector
-    ? 'document.querySelector(' + JSON.stringify(selector) + ')'
-    : '[...document.querySelectorAll("a,button,input,textarea,[role=button]")].find(el => (el.innerText || el.value || el.getAttribute("aria-label") || "").includes(' + JSON.stringify(text ?? '') + '))';
+async function pressKey(cdp, parsed) {
+  const down = { type: 'keyDown', key: parsed.key, windowsVirtualKeyCode: parsed.code, nativeVirtualKeyCode: parsed.code, modifiers: parsed.mask };
+  if (parsed.text) down.text = parsed.text;
+  await cdp.send('Input.dispatchKeyEvent', down);
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: parsed.key, windowsVirtualKeyCode: parsed.code, nativeVirtualKeyCode: parsed.code, modifiers: parsed.mask });
 }
 
-export function selectorExpression(selector, text, mode) {
-  const find = findExpression(selector, text);
+const TEXT_TARGETS = 'a,button,input,textarea,select,[role=button],[role=menuitem],[role=option],[role=tab],[role=link],[contenteditable=true],li,div,span,label,p,h1,h2,h3,h4,h5,h6';
+
+// Resolve a selector or visible text to one element. Both modes prefer visible
+// matches (the first hidden duplicate must not win, e.g. an input cloned
+// off-screen), support a 1-based index into the ordered matches, and the text
+// search also covers plain li/div/span menus, not only buttons.
+function findExpression(selector, text, index) {
+  const nth = Math.max(1, Math.floor(Number(index) || 1)) - 1;
+  const locate = selector
+    ? 'const matches = [...document.querySelectorAll(' + JSON.stringify(selector) + ')];'
+    : 'const needle = ' + JSON.stringify(text ?? '') + ';'
+      + ' const matches = [...document.querySelectorAll("' + TEXT_TARGETS + '")].slice(0, 800)'
+      + ' .map(el => ({ el, label: (el.innerText || el.value || el.getAttribute("aria-label") || "").trim() }))'
+      + ' .filter(item => item.label && item.label.includes(needle))'
+      + ' .sort((a, b) => { const at = a.label === needle ? 0 : a.label.length; const bt = b.label === needle ? 0 : b.label.length; return at - bt; })'
+      + ' .map(item => item.el);';
+  return '(function () { ' + locate
+    + ' const visible = matches.filter(el => { const r = el.getBoundingClientRect(); return r && r.width > 0 && r.height > 0; });'
+    + ' const ordered = visible.length ? visible : matches;'
+    + ' return ordered.length > ' + nth + ' ? ordered[' + nth + '] : null; })()';
+}
+
+export function selectorExpression(selector, text, mode, index) {
+  const find = findExpression(selector, text, index);
   if (mode === 'click') return '(el => { if (!el) return false; el.click(); return true; })(' + find + ')';
   return '(el => { if (!el) return false; el.focus(); if (el.select) el.select(); return true; })(' + find + ')';
 }
@@ -427,8 +476,8 @@ export function selectorExpression(selector, text, mode) {
 // Resolve an element to viewport CSS pixels so clicks go through the same
 // hit-testing as a real pointer instead of el.click() (which bypasses overlays
 // and does not fire pointer/mouse coordinates).
-function targetExpression(selector, text) {
-  const find = findExpression(selector, text);
+function targetExpression(selector, text, index) {
+  const find = findExpression(selector, text, index);
   return '(() => { const el = ' + find + '; if (!el) return { found: false };'
     + ' el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });'
     + ' const r = el.getBoundingClientRect();'
@@ -438,8 +487,8 @@ function targetExpression(selector, text) {
     + ' })()';
 }
 
-async function elementPoint(cdp, selector, text) {
-  const target = await evaluate(cdp, targetExpression(selector, text));
+async function elementPoint(cdp, selector, text, index) {
+  const target = await evaluate(cdp, targetExpression(selector, text, index));
   if (!target?.found) throw new WorkspaceError('BROWSER_TARGET_MISSING', '没找到目标元素，请给出 selector 或可见文字。');
   if (!target.visible) throw new WorkspaceError('BROWSER_TARGET_MISSING', '目标元素不可见（宽高为 0）。');
   if (target.x < 0 || target.y < 0 || target.x > VIEWPORT.width || target.y > VIEWPORT.height) {
@@ -481,10 +530,19 @@ const INTERACTIVE_STATE = '(() => { const out = []; const nodes = [...document.q
   + ' id: el.id || undefined, name: el.name || undefined, type: el.type || undefined, href: el.href || undefined, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });'
   + ' if (out.length >= 40) break; } return out; })()';
 
-async function typeText(cdp, selector, text) {
-  const focus = selectorExpression(selector, text, 'focus');
-  const found = await evaluate(cdp, focus);
-  if (!found) return false;
+// Without a selector, type into the element that currently has focus (the one
+// a previous click left focused); with a selector, focus that element first.
+const EDITABLE_FOCUS = '(() => { const el = document.activeElement; if (!el || el === document.body) return false;'
+  + ' const tag = (el.tagName || "").toLowerCase();'
+  + ' return tag === "input" || tag === "textarea" || el.isContentEditable === true; })()';
+
+async function typeText(cdp, selector, index, text) {
+  if (selector) {
+    const found = await evaluate(cdp, selectorExpression(selector, '', 'focus', index));
+    if (!found) throw new WorkspaceError('BROWSER_TARGET_MISSING', '没找到输入框：请给出 selector，或先用 click 聚焦输入框。');
+  } else if (!(await evaluate(cdp, EDITABLE_FOCUS))) {
+    throw new WorkspaceError('BROWSER_TARGET_MISSING', '当前焦点不是输入框：请先 click 输入框，或用 selector 指定目标。');
+  }
   const value = String(text ?? '');
   try {
     await cdp.send('Input.insertText', { text: value });
@@ -533,7 +591,7 @@ async function runAction(session, args, signal) {
     return { action, url: state.url, title: state.title, screenshot: image, note: '截图已保存：' + image.path };
   }
   if (action === 'click') {
-    const point = await elementPoint(session.cdp, args.selector, args.text);
+    const point = await elementPoint(session.cdp, args.selector, args.text, args.index);
     await mouseClick(session.cdp, point, { button: args.button ?? 'left', clickCount: args.clickCount ?? 1 });
     await delay(300);
     await waitReady(session.cdp).catch(() => {});
@@ -542,7 +600,7 @@ async function runAction(session, args, signal) {
     return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, clicked: { tag: point.tag, label: point.label, x: point.x, y: point.y } };
   }
   if (action === 'hover') {
-    const point = await elementPoint(session.cdp, args.selector, args.text);
+    const point = await elementPoint(session.cdp, args.selector, args.text, args.index);
     await session.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, button: 'none', buttons: 0 });
     await delay(200);
     const state = await evaluate(session.cdp, PAGE_STATE);
@@ -550,7 +608,7 @@ async function runAction(session, args, signal) {
     return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, hovered: { tag: point.tag, label: point.label, x: point.x, y: point.y } };
   }
   if (action === 'drag') {
-    const from = await elementPoint(session.cdp, args.selector, args.text);
+    const from = await elementPoint(session.cdp, args.selector, args.text, args.index);
     const toX = Number(args.toX);
     const toY = Number(args.toY);
     if (!Number.isFinite(toX) || !Number.isFinite(toY)) throw new WorkspaceError('INVALID_ARGUMENTS', 'drag 需要 toX 和 toY（目标坐标，可先用 snapshot 的 elements 取得）。');
@@ -562,7 +620,7 @@ async function runAction(session, args, signal) {
   }
   if (action === 'mouse') {
     let point;
-    if (args.selector || args.text) point = await elementPoint(session.cdp, args.selector, args.text);
+    if (args.selector || args.text) point = await elementPoint(session.cdp, args.selector, args.text, args.index);
     else {
       const x = Number(args.x);
       const y = Number(args.y);
@@ -571,17 +629,16 @@ async function runAction(session, args, signal) {
     }
     await mouseClick(session.cdp, point, { button: args.button ?? 'left', clickCount: args.clickCount ?? 1 });
     await delay(200);
-    const state = await evaluate(session.cdp, PAGE_STATE);
-    const body = clip(state.text, maxChars);
-    return { action, url: state.url, title: state.title, text: body.text, truncated: body.truncated, clicked: { tag: point.tag, label: point.label, x: point.x, y: point.y } };
+    // Coordinate clicks return the clicked point only: the full page body is
+    // fetched separately via snapshot/view, not paid for on every mouse move.
+    return { action, clicked: { tag: point.tag, label: point.label, x: point.x, y: point.y }, note: '坐标点击不返回页面正文；需要内容用 snapshot 或 view。' };
   }
   if (action === 'type') {
-    const done = await typeText(session.cdp, args.selector, args.text);
-    if (!done) throw new WorkspaceError('BROWSER_TARGET_MISSING', '没找到输入框，请给出 selector。');
+    await typeText(session.cdp, args.selector, args.index, args.text);
     return { action, typed: String(args.text ?? '').length };
   }
   if (action === 'press') {
-    await pressKey(session.cdp, String(args.key ?? 'Enter'));
+    await pressKey(session.cdp, parseKey(args.key ?? 'Enter'));
     await delay(200);
     const state = await evaluate(session.cdp, PAGE_STATE);
     const body = clip(state.text, maxChars);
@@ -620,9 +677,14 @@ export async function runBrowseTool(args = {}, { root = '', config = {}, signal 
     clearInterval(session.timer);
     session.gate.wake();
     await closeQueued(session);
+    // Remember the explicit close: later actions fail instead of silently
+    // relaunching a blank session; the caller has to open a URL again.
+    closedRoots.add(key);
     return { action, closed: true };
   }
+  if (closedRoots.has(key)) throw new WorkspaceError('BROWSER_NOT_OPEN', '浏览器已用 close 关闭；请先用 action=open 重新打开网址。');
   const session = await sessionFor(key, config);
+  closedRoots.delete(key);
   session.lastUsed = Date.now();
   session.pending += 1;
   // A read-only snapshot or screenshot does not need the page to sit still, so
@@ -648,6 +710,7 @@ export async function runBrowseTool(args = {}, { root = '', config = {}, signal 
 export async function closeAllBrowsers() {
   for (const [key, session] of sessions) {
     sessions.delete(key);
+    closedRoots.add(key);
     clearInterval(session.timer);
     await closeSession(session).catch(() => {});
   }
